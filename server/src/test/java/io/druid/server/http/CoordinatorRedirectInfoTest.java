@@ -76,10 +76,9 @@ public class CoordinatorRedirectInfoTest
   @Test
   public void testGetRedirectURL()
   {
-    String host = "localhost";
     String query = "foo=bar&x=y";
     String request = "/request";
-    EasyMock.expect(druidCoordinator.getCurrentLeader()).andReturn(host).anyTimes();
+    EasyMock.expect(druidCoordinator.getCurrentLeader()).andReturn("http://localhost").anyTimes();
     EasyMock.replay(druidCoordinator);
     URL url = coordinatorRedirectInfo.getRedirectURL(query, request);
     Assert.assertEquals("http://localhost/request?foo=bar&x=y", url.toString());

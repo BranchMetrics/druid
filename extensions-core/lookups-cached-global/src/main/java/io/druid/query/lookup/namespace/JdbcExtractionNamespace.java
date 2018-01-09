@@ -29,6 +29,7 @@ import org.joda.time.Period;
 import javax.annotation.Nullable;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
+import java.util.Objects;
 
 /**
  *
@@ -47,22 +48,20 @@ public class JdbcExtractionNamespace implements ExtractionNamespace
   @JsonProperty
   private final String tsColumn;
   @JsonProperty
+  private final String filter;
+  @JsonProperty
   private final Period pollPeriod;
 
   @JsonCreator
   public JdbcExtractionNamespace(
       @NotNull @JsonProperty(value = "connectorConfig", required = true)
       final MetadataStorageConnectorConfig connectorConfig,
-      @NotNull @JsonProperty(value = "table", required = true)
-      final String table,
-      @NotNull @JsonProperty(value = "keyColumn", required = true)
-      final String keyColumn,
-      @NotNull @JsonProperty(value = "valueColumn", required = true)
-      final String valueColumn,
-      @Nullable @JsonProperty(value = "tsColumn", required = false)
-      final String tsColumn,
-      @Min(0) @Nullable @JsonProperty(value = "pollPeriod", required = false)
-      final Period pollPeriod
+      @NotNull @JsonProperty(value = "table", required = true) final String table,
+      @NotNull @JsonProperty(value = "keyColumn", required = true) final String keyColumn,
+      @NotNull @JsonProperty(value = "valueColumn", required = true) final String valueColumn,
+      @Nullable @JsonProperty(value = "tsColumn", required = false) final String tsColumn,
+      @Nullable @JsonProperty(value = "filter", required = false) final String filter,
+      @Min(0) @Nullable @JsonProperty(value = "pollPeriod", required = false) final Period pollPeriod
   )
   {
     this.connectorConfig = Preconditions.checkNotNull(connectorConfig, "connectorConfig");
@@ -71,6 +70,7 @@ public class JdbcExtractionNamespace implements ExtractionNamespace
     this.keyColumn = Preconditions.checkNotNull(keyColumn, "keyColumn");
     this.valueColumn = Preconditions.checkNotNull(valueColumn, "valueColumn");
     this.tsColumn = tsColumn;
+    this.filter = filter;
     this.pollPeriod = pollPeriod == null ? new Period(0L) : pollPeriod;
   }
 
@@ -94,6 +94,11 @@ public class JdbcExtractionNamespace implements ExtractionNamespace
     return valueColumn;
   }
 
+  public String getFilter()
+  {
+    return filter;
+  }
+
   public String getTsColumn()
   {
     return tsColumn;
@@ -108,15 +113,15 @@ public class JdbcExtractionNamespace implements ExtractionNamespace
   @Override
   public String toString()
   {
-    return String.format(
-        "JdbcExtractionNamespace = { connectorConfig = { %s }, table = %s, keyColumn = %s, valueColumn = %s, tsColumn = %s, pollPeriod = %s}",
-        connectorConfig.toString(),
-        table,
-        keyColumn,
-        valueColumn,
-        tsColumn,
-        pollPeriod
-    );
+    return "JdbcExtractionNamespace{" +
+           "connectorConfig=" + connectorConfig +
+           ", table='" + table + '\'' +
+           ", keyColumn='" + keyColumn + '\'' +
+           ", valueColumn='" + valueColumn + '\'' +
+           ", tsColumn='" + tsColumn + '\'' +
+           ", filter='" + filter + '\'' +
+           ", pollPeriod=" + pollPeriod +
+           '}';
   }
 
   @Override
@@ -131,34 +136,26 @@ public class JdbcExtractionNamespace implements ExtractionNamespace
 
     JdbcExtractionNamespace that = (JdbcExtractionNamespace) o;
 
-    if (!connectorConfig.equals(that.connectorConfig)) {
-      return false;
-    }
-    if (!table.equals(that.table)) {
-      return false;
-    }
-    if (!keyColumn.equals(that.keyColumn)) {
-      return false;
-    }
-    if (!valueColumn.equals(that.valueColumn)) {
-      return false;
-    }
-    if (tsColumn != null ? !tsColumn.equals(that.tsColumn) : that.tsColumn != null) {
-      return false;
-    }
-    return pollPeriod.equals(that.pollPeriod);
-
+    return Objects.equals(connectorConfig, that.connectorConfig) &&
+           Objects.equals(table, that.table) &&
+           Objects.equals(filter, that.filter) &&
+           Objects.equals(keyColumn, that.keyColumn) &&
+           Objects.equals(valueColumn, that.valueColumn) &&
+           Objects.equals(tsColumn, that.tsColumn) &&
+           Objects.equals(pollPeriod, that.pollPeriod);
   }
 
   @Override
   public int hashCode()
   {
-    int result = connectorConfig.hashCode();
-    result = 31 * result + table.hashCode();
-    result = 31 * result + keyColumn.hashCode();
-    result = 31 * result + valueColumn.hashCode();
-    result = 31 * result + (tsColumn != null ? tsColumn.hashCode() : 0);
-    result = 31 * result + pollPeriod.hashCode();
-    return result;
+    return Objects.hash(
+        connectorConfig,
+        table,
+        filter,
+        keyColumn,
+        valueColumn,
+        tsColumn,
+        pollPeriod
+    );
   }
 }

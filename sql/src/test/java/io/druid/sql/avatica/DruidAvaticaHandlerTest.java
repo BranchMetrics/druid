@@ -30,10 +30,23 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.inject.Binder;
+import com.google.inject.Injector;
+import com.google.inject.Module;
+import com.google.inject.name.Names;
+import io.druid.guice.GuiceInjectors;
+import io.druid.initialization.Initialization;
+import io.druid.java.util.common.DateTimes;
 import io.druid.java.util.common.Pair;
+import io.druid.java.util.common.StringUtils;
 import io.druid.math.expr.ExprMacroTable;
 import io.druid.server.DruidNode;
-import io.druid.server.initialization.ServerConfig;
+import io.druid.server.security.NoopEscalator;
+import io.druid.server.security.AuthConfig;
+import io.druid.server.security.AuthTestUtils;
+import io.druid.server.security.AuthenticatorMapper;
+import io.druid.server.security.AuthorizerMapper;
+import io.druid.server.security.Escalator;
 import io.druid.sql.calcite.planner.Calcites;
 import io.druid.sql.calcite.planner.DruidOperatorTable;
 import io.druid.sql.calcite.planner.PlannerConfig;
@@ -105,9 +118,11 @@ public class DruidAvaticaHandlerTest
   private SpecificSegmentsQuerySegmentWalker walker;
   private Server server;
   private Connection client;
+  private Connection superuserClient;
   private Connection clientLosAngeles;
   private DruidMeta druidMeta;
   private String url;
+  private Injector injector;
 
   @Before
   public void setUp() throws Exception
@@ -118,28 +133,61 @@ public class DruidAvaticaHandlerTest
     final DruidSchema druidSchema = CalciteTests.createMockSchema(walker, plannerConfig);
     final DruidOperatorTable operatorTable = CalciteTests.createOperatorTable();
     final ExprMacroTable macroTable = CalciteTests.createExprMacroTable();
+
+    injector = Initialization.makeInjectorWithModules(
+        GuiceInjectors.makeStartupInjector(),
+        ImmutableList.of(
+            new Module()
+            {
+              @Override
+              public void configure(Binder binder)
+              {
+                binder.bindConstant().annotatedWith(Names.named("serviceName")).to("test");
+                binder.bindConstant().annotatedWith(Names.named("servicePort")).to(0);
+                binder.bindConstant().annotatedWith(Names.named("tlsServicePort")).to(-1);
+                binder.bind(AuthenticatorMapper.class).toInstance(CalciteTests.TEST_AUTHENTICATOR_MAPPER);
+                binder.bind(AuthorizerMapper.class).toInstance(CalciteTests.TEST_AUTHORIZER_MAPPER);
+                binder.bind(Escalator.class).toInstance(CalciteTests.TEST_AUTHENTICATOR_ESCALATOR);
+              }
+            }
+        )
+    );
     druidMeta = new DruidMeta(
-        new PlannerFactory(druidSchema, walker, operatorTable, macroTable, plannerConfig, new ServerConfig()),
-        AVATICA_CONFIG
+        new PlannerFactory(
+            druidSchema,
+            CalciteTests.createMockQueryLifecycleFactory(walker),
+            operatorTable,
+            macroTable,
+            plannerConfig,
+            new AuthConfig(),
+            CalciteTests.TEST_AUTHORIZER_MAPPER,
+            CalciteTests.TEST_AUTHENTICATOR_ESCALATOR,
+            CalciteTests.getJsonMapper()
+        ),
+        AVATICA_CONFIG,
+        new AuthConfig(),
+        injector
     );
     final DruidAvaticaHandler handler = new DruidAvaticaHandler(
         druidMeta,
-        new DruidNode("dummy", "dummy", 1),
+        new DruidNode("dummy", "dummy", 1, null, true, false),
         new AvaticaMonitor()
     );
     final int port = new Random().nextInt(9999) + 10000;
     server = new Server(new InetSocketAddress("127.0.0.1", port));
     server.setHandler(handler);
     server.start();
-    url = String.format(
+    url = StringUtils.format(
         "jdbc:avatica:remote:url=http://127.0.0.1:%d%s",
         port,
         DruidAvaticaHandler.AVATICA_PATH
     );
-    client = DriverManager.getConnection(url);
+    client = DriverManager.getConnection(url, "regularUser", "druid");
+    superuserClient = DriverManager.getConnection(url, CalciteTests.TEST_SUPERUSER_NAME, "druid");
 
     final Properties propertiesLosAngeles = new Properties();
     propertiesLosAngeles.setProperty("sqlTimeZone", "America/Los_Angeles");
+    propertiesLosAngeles.setProperty("user", "regularUserLA");
     clientLosAngeles = DriverManager.getConnection(url, propertiesLosAngeles);
   }
 
@@ -192,8 +240,8 @@ public class DruidAvaticaHandlerTest
     Assert.assertEquals(
         ImmutableList.of(
             ImmutableMap.of(
-                "__time", new Timestamp(new DateTime("2000-01-01T00:00:00.000Z").getMillis()),
-                "t2", new Date(new DateTime("2000-01-01").getMillis())
+                "__time", new Timestamp(DateTimes.of("2000-01-01T00:00:00.000Z").getMillis()),
+                "t2", new Date(DateTimes.of("2000-01-01").getMillis())
             )
         ),
         getRows(resultSet)
@@ -249,7 +297,7 @@ public class DruidAvaticaHandlerTest
         ImmutableList.of(
             ImmutableMap.of(
                 "PLAN",
-                "DruidQueryRel(dataSource=[foo], dimensions=[[]], aggregations=[[Aggregation{aggregatorFactories=[CountAggregatorFactory{name='a0'}], postAggregator=null, finalizingPostAggregatorFactory=null}]])\n"
+                "DruidQueryRel(query=[{\"queryType\":\"timeseries\",\"dataSource\":{\"type\":\"table\",\"name\":\"foo\"},\"intervals\":{\"type\":\"intervals\",\"intervals\":[\"-146136543-09-08T08:23:32.096Z/146140482-04-24T15:36:27.903Z\"]},\"descending\":false,\"virtualColumns\":[],\"filter\":null,\"granularity\":{\"type\":\"all\"},\"aggregations\":[{\"type\":\"count\",\"name\":\"a0\"}],\"postAggregations\":[],\"context\":{\"skipEmptyBuckets\":true}}], signature=[{a0:LONG}])\n"
             )
         ),
         getRows(resultSet)
@@ -307,6 +355,38 @@ public class DruidAvaticaHandlerTest
   }
 
   @Test
+  public void testDatabaseMetaDataTablesAsSuperuser() throws Exception
+  {
+    final DatabaseMetaData metaData = superuserClient.getMetaData();
+    Assert.assertEquals(
+        ImmutableList.of(
+            ROW(
+                Pair.of("TABLE_CAT", ""),
+                Pair.of("TABLE_NAME", CalciteTests.DATASOURCE1),
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_TYPE", "TABLE")
+            ),
+            ROW(
+                Pair.of("TABLE_CAT", ""),
+                Pair.of("TABLE_NAME", CalciteTests.DATASOURCE2),
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_TYPE", "TABLE")
+            ),
+            ROW(
+                Pair.of("TABLE_CAT", ""),
+                Pair.of("TABLE_NAME", CalciteTests.FORBIDDEN_DATASOURCE),
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_TYPE", "TABLE")
+            )
+        ),
+        getRows(
+            metaData.getTables(null, "druid", "%", null),
+            ImmutableSet.of("TABLE_CAT", "TABLE_NAME", "TABLE_SCHEM", "TABLE_TYPE")
+        )
+    );
+  }
+
+  @Test
   public void testDatabaseMetaDataColumns() throws Exception
   {
     final DatabaseMetaData metaData = client.getMetaData();
@@ -334,7 +414,7 @@ public class DruidAvaticaHandlerTest
                 Pair.of("COLUMN_NAME", "dim1"),
                 Pair.of("DATA_TYPE", Types.VARCHAR),
                 Pair.of("TYPE_NAME", "VARCHAR"),
-                Pair.of("IS_NULLABLE", "NO")
+                Pair.of("IS_NULLABLE", "YES")
             ),
             ROW(
                 Pair.of("TABLE_SCHEM", "druid"),
@@ -342,7 +422,7 @@ public class DruidAvaticaHandlerTest
                 Pair.of("COLUMN_NAME", "dim2"),
                 Pair.of("DATA_TYPE", Types.VARCHAR),
                 Pair.of("TYPE_NAME", "VARCHAR"),
-                Pair.of("IS_NULLABLE", "NO")
+                Pair.of("IS_NULLABLE", "YES")
             ),
             ROW(
                 Pair.of("TABLE_SCHEM", "druid"),
@@ -350,6 +430,14 @@ public class DruidAvaticaHandlerTest
                 Pair.of("COLUMN_NAME", "m1"),
                 Pair.of("DATA_TYPE", Types.FLOAT),
                 Pair.of("TYPE_NAME", "FLOAT"),
+                Pair.of("IS_NULLABLE", "NO")
+            ),
+            ROW(
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_NAME", "foo"),
+                Pair.of("COLUMN_NAME", "m2"),
+                Pair.of("DATA_TYPE", Types.DOUBLE),
+                Pair.of("TYPE_NAME", "DOUBLE"),
                 Pair.of("IS_NULLABLE", "NO")
             ),
             ROW(
@@ -368,6 +456,90 @@ public class DruidAvaticaHandlerTest
     );
   }
 
+  @Test
+  public void testDatabaseMetaDataColumnsOnForbiddenDatasource() throws Exception
+  {
+    final DatabaseMetaData metaData = client.getMetaData();
+    Assert.assertEquals(
+        ImmutableList.of(),
+        getRows(
+            metaData.getColumns(null, "dr_id", CalciteTests.FORBIDDEN_DATASOURCE, null),
+            ImmutableSet.of("IS_NULLABLE", "TABLE_NAME", "TABLE_SCHEM", "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME")
+        )
+    );
+  }
+
+  @Test
+  public void testDatabaseMetaDataColumnsWithSuperuser() throws Exception
+  {
+    final DatabaseMetaData metaData = superuserClient.getMetaData();
+    Assert.assertEquals(
+        ImmutableList.of(
+            ROW(
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_NAME", CalciteTests.FORBIDDEN_DATASOURCE),
+                Pair.of("COLUMN_NAME", "__time"),
+                Pair.of("DATA_TYPE", Types.TIMESTAMP),
+                Pair.of("TYPE_NAME", "TIMESTAMP"),
+                Pair.of("IS_NULLABLE", "NO")
+            ),
+            ROW(
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_NAME", CalciteTests.FORBIDDEN_DATASOURCE),
+                Pair.of("COLUMN_NAME", "cnt"),
+                Pair.of("DATA_TYPE", Types.BIGINT),
+                Pair.of("TYPE_NAME", "BIGINT"),
+                Pair.of("IS_NULLABLE", "NO")
+            ),
+            ROW(
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_NAME", CalciteTests.FORBIDDEN_DATASOURCE),
+                Pair.of("COLUMN_NAME", "dim1"),
+                Pair.of("DATA_TYPE", Types.VARCHAR),
+                Pair.of("TYPE_NAME", "VARCHAR"),
+                Pair.of("IS_NULLABLE", "YES")
+            ),
+            ROW(
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_NAME", CalciteTests.FORBIDDEN_DATASOURCE),
+                Pair.of("COLUMN_NAME", "dim2"),
+                Pair.of("DATA_TYPE", Types.VARCHAR),
+                Pair.of("TYPE_NAME", "VARCHAR"),
+                Pair.of("IS_NULLABLE", "YES")
+            ),
+            ROW(
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_NAME", CalciteTests.FORBIDDEN_DATASOURCE),
+                Pair.of("COLUMN_NAME", "m1"),
+                Pair.of("DATA_TYPE", Types.FLOAT),
+                Pair.of("TYPE_NAME", "FLOAT"),
+                Pair.of("IS_NULLABLE", "NO")
+            ),
+            ROW(
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_NAME", CalciteTests.FORBIDDEN_DATASOURCE),
+                Pair.of("COLUMN_NAME", "m2"),
+                Pair.of("DATA_TYPE", Types.DOUBLE),
+                Pair.of("TYPE_NAME", "DOUBLE"),
+                Pair.of("IS_NULLABLE", "NO")
+            ),
+            ROW(
+                Pair.of("TABLE_SCHEM", "druid"),
+                Pair.of("TABLE_NAME", CalciteTests.FORBIDDEN_DATASOURCE),
+                Pair.of("COLUMN_NAME", "unique_dim1"),
+                Pair.of("DATA_TYPE", Types.OTHER),
+                Pair.of("TYPE_NAME", "OTHER"),
+                Pair.of("IS_NULLABLE", "NO")
+            )
+        ),
+        getRows(
+            metaData.getColumns(null, "dr_id", CalciteTests.FORBIDDEN_DATASOURCE, null),
+            ImmutableSet.of("IS_NULLABLE", "TABLE_NAME", "TABLE_SCHEM", "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME")
+        )
+    );
+  }
+
+
   @Test(timeout = 90000)
   public void testConcurrentQueries() throws Exception
   {
@@ -376,7 +548,7 @@ public class DruidAvaticaHandlerTest
         Executors.newFixedThreadPool(AVATICA_CONFIG.getMaxStatementsPerConnection())
     );
     for (int i = 0; i < 2000; i++) {
-      final String query = String.format("SELECT COUNT(*) + %s AS ci FROM foo", i);
+      final String query = StringUtils.format("SELECT COUNT(*) + %s AS ci FROM foo", i);
       futures.add(
           exec.submit(() -> {
             try (
@@ -541,11 +713,22 @@ public class DruidAvaticaHandlerTest
     final DruidSchema druidSchema = CalciteTests.createMockSchema(walker, plannerConfig);
     final DruidOperatorTable operatorTable = CalciteTests.createOperatorTable();
     final ExprMacroTable macroTable = CalciteTests.createExprMacroTable();
-
     final List<Meta.Frame> frames = new ArrayList<>();
     DruidMeta smallFrameDruidMeta = new DruidMeta(
-        new PlannerFactory(druidSchema, walker, operatorTable, macroTable, plannerConfig, new ServerConfig()),
-        smallFrameConfig
+        new PlannerFactory(
+            druidSchema,
+            CalciteTests.createMockQueryLifecycleFactory(walker),
+            operatorTable,
+            macroTable,
+            plannerConfig,
+            new AuthConfig(),
+            AuthTestUtils.TEST_AUTHORIZER_MAPPER,
+            new NoopEscalator(),
+            CalciteTests.getJsonMapper()
+        ),
+        smallFrameConfig,
+        new AuthConfig(),
+        injector
     )
     {
       @Override
@@ -559,24 +742,24 @@ public class DruidAvaticaHandlerTest
         Frame frame = super.fetch(statement, offset, fetchMaxRowCount);
         frames.add(frame);
         return frame;
-      };
+      }
     };
 
     final DruidAvaticaHandler handler = new DruidAvaticaHandler(
         smallFrameDruidMeta,
-        new DruidNode("dummy", "dummy", 1),
+        new DruidNode("dummy", "dummy", 1, null, true, false),
         new AvaticaMonitor()
     );
     final int port = new Random().nextInt(9999) + 20000;
     Server smallFrameServer = new Server(new InetSocketAddress("127.0.0.1", port));
     smallFrameServer.setHandler(handler);
     smallFrameServer.start();
-    String smallFrameUrl = String.format(
+    String smallFrameUrl = StringUtils.format(
         "jdbc:avatica:remote:url=http://127.0.0.1:%d%s",
         port,
         DruidAvaticaHandler.AVATICA_PATH
     );
-    Connection smallFrameClient = DriverManager.getConnection(smallFrameUrl);
+    Connection smallFrameClient = DriverManager.getConnection(smallFrameUrl, "regularUser", "druid");
 
     final ResultSet resultSet = smallFrameClient.createStatement().executeQuery(
         "SELECT dim1 FROM druid.foo"

@@ -21,7 +21,6 @@ package io.druid.security.kerberos;
 
 import com.google.common.base.Strings;
 import io.druid.java.util.common.ISE;
-import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.hadoop.conf.Configuration;
@@ -40,6 +39,7 @@ import java.io.IOException;
 import java.net.CookieStore;
 import java.net.HttpCookie;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -73,7 +73,7 @@ public class DruidKerberosUtil
       // Create a GSSContext for authentication with the service.
       // We're passing client credentials as null since we want them to be read from the Subject.
       GSSContext gssContext =
-        manager.createContext(serverName.canonicalize(mechOid), mechOid, null, GSSContext.DEFAULT_LIFETIME);
+          manager.createContext(serverName.canonicalize(mechOid), mechOid, null, GSSContext.DEFAULT_LIFETIME);
       gssContext.requestMutualAuth(true);
       gssContext.requestCredDeleg(true);
       // Establish context
@@ -81,7 +81,7 @@ public class DruidKerberosUtil
       byte[] outToken = gssContext.initSecContext(inToken, 0, inToken.length);
       gssContext.dispose();
       // Base64 encoded and stringified token for server
-      return StringUtils.fromUtf8(base64codec.encode(outToken));
+      return new String(base64codec.encode(outToken), StandardCharsets.US_ASCII);
     }
     catch (GSSException | IllegalAccessException | NoSuchFieldException | ClassNotFoundException e) {
       throw new AuthenticationException(e);
@@ -91,29 +91,33 @@ public class DruidKerberosUtil
     }
   }
 
-  public static void authenticateIfRequired(AuthenticationKerberosConfig config)
-    throws IOException
+  public static void authenticateIfRequired(String internalClientPrincipal, String internalClientKeytab)
+      throws IOException
   {
-    String principal = config.getPrincipal();
-    String keytab = config.getKeytab();
-    if (!Strings.isNullOrEmpty(principal) && !Strings.isNullOrEmpty(keytab)) {
+    if (!Strings.isNullOrEmpty(internalClientPrincipal) && !Strings.isNullOrEmpty(internalClientKeytab)) {
       Configuration conf = new Configuration();
       conf.set(CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHENTICATION, "kerberos");
       UserGroupInformation.setConfiguration(conf);
       try {
         if (UserGroupInformation.getCurrentUser().hasKerberosCredentials() == false
-            || !UserGroupInformation.getCurrentUser().getUserName().equals(principal)) {
-          log.info("trying to authenticate user [%s] with keytab [%s]", principal, keytab);
-          UserGroupInformation.loginUserFromKeytab(principal, keytab);
+            || !UserGroupInformation.getCurrentUser().getUserName().equals(internalClientPrincipal)) {
+          log.info("trying to authenticate user [%s] with keytab [%s]", internalClientPrincipal, internalClientKeytab);
+          UserGroupInformation.loginUserFromKeytab(internalClientPrincipal, internalClientKeytab);
         }
       }
       catch (IOException e) {
-        throw new ISE(e, "Failed to authenticate user principal [%s] with keytab [%s]", principal, keytab);
+        throw new ISE(
+            e,
+            "Failed to authenticate user principal [%s] with keytab [%s]",
+            internalClientPrincipal,
+            internalClientKeytab
+        );
       }
     }
   }
 
-  public static boolean needToSendCredentials(CookieStore cookieStore, URI uri){
+  public static boolean needToSendCredentials(CookieStore cookieStore, URI uri)
+  {
     return getAuthCookie(cookieStore, uri) == null;
   }
 

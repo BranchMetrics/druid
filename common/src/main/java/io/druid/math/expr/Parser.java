@@ -26,6 +26,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.math.expr.antlr.ExprLexer;
 import io.druid.math.expr.antlr.ExprParser;
@@ -50,7 +51,7 @@ public class Parser
       if (!Modifier.isAbstract(clazz.getModifiers()) && Function.class.isAssignableFrom(clazz)) {
         try {
           Function function = (Function) clazz.newInstance();
-          functionMap.put(function.name().toLowerCase(), function);
+          functionMap.put(StringUtils.toLowerCase(function.name()), function);
         }
         catch (Exception e) {
           log.info("failed to instantiate " + clazz.getName() + ".. ignoring", e);
@@ -62,7 +63,7 @@ public class Parser
 
   public static Function getFunction(String name)
   {
-    return FUNCTIONS.get(name.toLowerCase());
+    return FUNCTIONS.get(StringUtils.toLowerCase(name));
   }
 
   public static Expr parse(String in, ExprMacroTable macroTable)
@@ -114,9 +115,9 @@ public class Parser
       List<Expr> args = functionExpr.args;
       boolean flattened = false;
       List<Expr> flattening = Lists.newArrayListWithCapacity(args.size());
-      for (int i = 0; i < args.size(); i++) {
-        Expr flatten = flatten(args.get(i));
-        flattened |= flatten != args.get(i);
+      for (Expr arg : args) {
+        Expr flatten = flatten(arg);
+        flattened |= flatten != arg;
         flattening.add(flatten);
       }
       if (Evals.isAllConstants(flattening)) {

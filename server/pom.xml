@@ -26,7 +26,7 @@
     <parent>
         <groupId>io.druid</groupId>
         <artifactId>druid</artifactId>
-        <version>0.11.0-SNAPSHOT</version>
+        <version>0.11.0</version>
     </parent>
 
     <dependencies>
@@ -47,11 +47,7 @@
         </dependency>
         <dependency>
             <groupId>com.metamx</groupId>
-            <artifactId>http-client</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.metamx</groupId>
-            <artifactId>server-metrics</artifactId>
+            <artifactId>java-util</artifactId>
         </dependency>
         <dependency>
             <groupId>commons-cli</groupId>

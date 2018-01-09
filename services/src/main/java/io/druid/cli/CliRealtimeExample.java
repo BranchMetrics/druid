@@ -82,6 +82,7 @@ public class CliRealtimeExample extends ServerRunnable
           {
             binder.bindConstant().annotatedWith(Names.named("serviceName")).to("druid/realtime");
             binder.bindConstant().annotatedWith(Names.named("servicePort")).to(8084);
+            binder.bindConstant().annotatedWith(Names.named("tlsServicePort")).to(8284);
 
             binder.bind(DataSegmentPusher.class).to(NoopDataSegmentPusher.class).in(LazySingleton.class);
             binder.bind(DataSegmentAnnouncer.class).to(NoopDataSegmentAnnouncer.class).in(LazySingleton.class);
@@ -97,17 +98,13 @@ public class CliRealtimeExample extends ServerRunnable
   private static class NoopServerView implements ServerView
   {
     @Override
-    public void registerServerCallback(
-        Executor exec, ServerCallback callback
-    )
+    public void registerServerRemovedCallback(Executor exec, ServerRemovedCallback callback)
     {
       // do nothing
     }
 
     @Override
-    public void registerSegmentCallback(
-        Executor exec, SegmentCallback callback
-    )
+    public void registerSegmentCallback(Executor exec, SegmentCallback callback)
     {
       // do nothing
     }

@@ -24,6 +24,7 @@ import org.joda.time.Period;
 
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
+import java.util.Objects;
 
 /**
  */
@@ -63,6 +64,28 @@ public class ServerConfig
   public long getMaxScatterGatherBytes()
   {
     return maxScatterGatherBytes;
+  }
+
+  @Override
+  public boolean equals(Object o)
+  {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+    ServerConfig that = (ServerConfig) o;
+    return numThreads == that.numThreads &&
+           defaultQueryTimeout == that.defaultQueryTimeout &&
+           maxScatterGatherBytes == that.maxScatterGatherBytes &&
+           Objects.equals(maxIdleTime, that.maxIdleTime);
+  }
+
+  @Override
+  public int hashCode()
+  {
+    return Objects.hash(numThreads, maxIdleTime, defaultQueryTimeout, maxScatterGatherBytes);
   }
 
   @Override

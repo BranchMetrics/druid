@@ -24,10 +24,12 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
 import io.druid.concurrent.Execs;
 import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Sequences;
 import io.druid.java.util.common.guava.Yielder;
 import io.druid.java.util.common.guava.Yielders;
+import io.druid.server.security.AuthenticationResult;
 import io.druid.sql.calcite.planner.DruidPlanner;
 import io.druid.sql.calcite.planner.PlannerFactory;
 import io.druid.sql.calcite.planner.PlannerResult;
@@ -103,7 +105,7 @@ public class DruidStatement implements Closeable
     this.queryContext = queryContext == null ? ImmutableMap.of() : queryContext;
     this.onClose = Preconditions.checkNotNull(onClose, "onClose");
     this.yielderOpenCloseExecutor = Execs.singleThreaded(
-        String.format("JDBCYielderOpenCloseExecutor-connection-%s-statement-%d", connectionId, statementId)
+        StringUtils.format("JDBCYielderOpenCloseExecutor-connection-%s-statement-%d", connectionId, statementId)
     );
   }
 
@@ -151,12 +153,17 @@ public class DruidStatement implements Closeable
     return columns;
   }
 
-  public DruidStatement prepare(final PlannerFactory plannerFactory, final String query, final long maxRowCount)
+  public DruidStatement prepare(
+      final PlannerFactory plannerFactory,
+      final String query,
+      final long maxRowCount,
+      final AuthenticationResult authenticationResult
+      )
   {
     try (final DruidPlanner planner = plannerFactory.createPlanner(queryContext)) {
       synchronized (lock) {
         ensure(State.NEW);
-        this.plannerResult = planner.plan(query);
+        this.plannerResult = planner.plan(query, null, authenticationResult);
         this.maxRowCount = maxRowCount;
         this.query = query;
         this.signature = Meta.Signature.create(

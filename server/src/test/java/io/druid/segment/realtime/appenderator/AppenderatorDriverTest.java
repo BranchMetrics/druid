@@ -34,6 +34,9 @@ import io.druid.data.input.Committer;
 import io.druid.data.input.InputRow;
 import io.druid.data.input.MapBasedInputRow;
 import io.druid.jackson.DefaultObjectMapper;
+import io.druid.java.util.common.DateTimes;
+import io.druid.java.util.common.Intervals;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.granularity.Granularities;
 import io.druid.java.util.common.granularity.Granularity;
 import io.druid.query.SegmentDescriptor;
@@ -46,7 +49,6 @@ import io.druid.timeline.VersionedIntervalTimeline;
 import io.druid.timeline.partition.NumberedShardSpec;
 import io.druid.timeline.partition.PartitionChunk;
 import org.joda.time.DateTime;
-import org.joda.time.Interval;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -71,22 +73,22 @@ public class AppenderatorDriverTest
   private static final ObjectMapper OBJECT_MAPPER = new DefaultObjectMapper();
   private static final int MAX_ROWS_IN_MEMORY = 100;
   private static final int MAX_ROWS_PER_SEGMENT = 3;
-  private static final long PUBLISH_TIMEOUT = 5000;
+  private static final long PUBLISH_TIMEOUT = 10000;
   private static final long HANDOFF_CONDITION_TIMEOUT = 1000;
 
   private static final List<InputRow> ROWS = Arrays.<InputRow>asList(
       new MapBasedInputRow(
-          new DateTime("2000"),
+          DateTimes.of("2000"),
           ImmutableList.of("dim1"),
           ImmutableMap.<String, Object>of("dim1", "foo", "met1", "1")
       ),
       new MapBasedInputRow(
-          new DateTime("2000T01"),
+          DateTimes.of("2000T01"),
           ImmutableList.of("dim1"),
           ImmutableMap.<String, Object>of("dim1", "foo", "met1", 2.0)
       ),
       new MapBasedInputRow(
-          new DateTime("2000T01"),
+          DateTimes.of("2000T01"),
           ImmutableList.of("dim2"),
           ImmutableMap.<String, Object>of("dim2", "bar", "met1", 2.0)
       )
@@ -137,13 +139,15 @@ public class AppenderatorDriverTest
         committerSupplier.get(),
         ImmutableList.of("dummy")
     ).get(PUBLISH_TIMEOUT, TimeUnit.MILLISECONDS);
+    Assert.assertFalse(driver.getActiveSegments().containsKey("dummy"));
+    Assert.assertFalse(driver.getPublishPendingSegments().containsKey("dummy"));
     final SegmentsAndMetadata segmentsAndMetadata = driver.registerHandoff(published)
                                                           .get(HANDOFF_CONDITION_TIMEOUT, TimeUnit.MILLISECONDS);
 
     Assert.assertEquals(
         ImmutableSet.of(
-            new SegmentIdentifier(DATA_SOURCE, new Interval("2000/PT1H"), VERSION, new NumberedShardSpec(0, 0)),
-            new SegmentIdentifier(DATA_SOURCE, new Interval("2000T01/PT1H"), VERSION, new NumberedShardSpec(0, 0))
+            new SegmentIdentifier(DATA_SOURCE, Intervals.of("2000/PT1H"), VERSION, new NumberedShardSpec(0, 0)),
+            new SegmentIdentifier(DATA_SOURCE, Intervals.of("2000T01/PT1H"), VERSION, new NumberedShardSpec(0, 0))
         ),
         asIdentifiers(segmentsAndMetadata.getSegments())
     );
@@ -161,11 +165,11 @@ public class AppenderatorDriverTest
     for (int i = 0; i < numSegments * MAX_ROWS_PER_SEGMENT; i++) {
       committerSupplier.setMetadata(i + 1);
       InputRow row = new MapBasedInputRow(
-          new DateTime("2000T01"),
+          DateTimes.of("2000T01"),
           ImmutableList.of("dim2"),
           ImmutableMap.of(
               "dim2",
-              String.format("bar-%d", i),
+              StringUtils.format("bar-%d", i),
               "met1",
               2.0
           )
@@ -182,6 +186,8 @@ public class AppenderatorDriverTest
         committerSupplier.get(),
         ImmutableList.of("dummy")
     ).get(PUBLISH_TIMEOUT, TimeUnit.MILLISECONDS);
+    Assert.assertFalse(driver.getActiveSegments().containsKey("dummy"));
+    Assert.assertFalse(driver.getPublishPendingSegments().containsKey("dummy"));
     final SegmentsAndMetadata segmentsAndMetadata = driver.registerHandoff(published)
                                                           .get(HANDOFF_CONDITION_TIMEOUT, TimeUnit.MILLISECONDS);
     Assert.assertEquals(numSegments, segmentsAndMetadata.getSegments().size());
@@ -206,6 +212,8 @@ public class AppenderatorDriverTest
         committerSupplier.get(),
         ImmutableList.of("dummy")
     ).get(PUBLISH_TIMEOUT, TimeUnit.MILLISECONDS);
+    Assert.assertFalse(driver.getActiveSegments().containsKey("dummy"));
+    Assert.assertFalse(driver.getPublishPendingSegments().containsKey("dummy"));
     driver.registerHandoff(published).get(HANDOFF_CONDITION_TIMEOUT, TimeUnit.MILLISECONDS);
   }
 
@@ -221,16 +229,15 @@ public class AppenderatorDriverTest
       committerSupplier.setMetadata(1);
       Assert.assertTrue(driver.add(ROWS.get(0), "dummy", committerSupplier).isOk());
 
-      final SegmentsAndMetadata published = driver.publish(
+      final SegmentsAndMetadata segmentsAndMetadata = driver.publishAndRegisterHandoff(
           makeOkPublisher(),
           committerSupplier.get(),
           ImmutableList.of("dummy")
       ).get(PUBLISH_TIMEOUT, TimeUnit.MILLISECONDS);
-      final SegmentsAndMetadata segmentsAndMetadata = driver.registerHandoff(published)
-                                                            .get(HANDOFF_CONDITION_TIMEOUT, TimeUnit.MILLISECONDS);
+
       Assert.assertEquals(
           ImmutableSet.of(
-              new SegmentIdentifier(DATA_SOURCE, new Interval("2000/PT1H"), VERSION, new NumberedShardSpec(0, 0))
+              new SegmentIdentifier(DATA_SOURCE, Intervals.of("2000/PT1H"), VERSION, new NumberedShardSpec(0, 0))
           ),
           asIdentifiers(segmentsAndMetadata.getSegments())
       );
@@ -243,18 +250,17 @@ public class AppenderatorDriverTest
       committerSupplier.setMetadata(i + 1);
       Assert.assertTrue(driver.add(ROWS.get(i), "dummy", committerSupplier).isOk());
 
-      final SegmentsAndMetadata published = driver.publish(
+      final SegmentsAndMetadata segmentsAndMetadata = driver.publishAndRegisterHandoff(
           makeOkPublisher(),
           committerSupplier.get(),
           ImmutableList.of("dummy")
       ).get(PUBLISH_TIMEOUT, TimeUnit.MILLISECONDS);
-      final SegmentsAndMetadata segmentsAndMetadata = driver.registerHandoff(published)
-                                                            .get(HANDOFF_CONDITION_TIMEOUT, TimeUnit.MILLISECONDS);
+
       Assert.assertEquals(
           ImmutableSet.of(
               // The second and third rows have the same dataSource, interval, and version, but different shardSpec of
               // different partitionNum
-              new SegmentIdentifier(DATA_SOURCE, new Interval("2000T01/PT1H"), VERSION, new NumberedShardSpec(i - 1, 0))
+              new SegmentIdentifier(DATA_SOURCE, Intervals.of("2000T01/PT1H"), VERSION, new NumberedShardSpec(i - 1, 0))
           ),
           asIdentifiers(segmentsAndMetadata.getSegments())
       );
@@ -265,13 +271,11 @@ public class AppenderatorDriverTest
     driver.persist(committerSupplier.get());
 
     // There is no remaining rows in the driver, and thus the result must be empty
-    final SegmentsAndMetadata published = driver.publish(
+    final SegmentsAndMetadata segmentsAndMetadata = driver.publishAndRegisterHandoff(
         makeOkPublisher(),
         committerSupplier.get(),
         ImmutableList.of("dummy")
     ).get(PUBLISH_TIMEOUT, TimeUnit.MILLISECONDS);
-    final SegmentsAndMetadata segmentsAndMetadata = driver.registerHandoff(published)
-                                                          .get(HANDOFF_CONDITION_TIMEOUT, TimeUnit.MILLISECONDS);
 
     Assert.assertEquals(
         ImmutableSet.of(),
@@ -319,14 +323,14 @@ public class AppenderatorDriverTest
 
     Assert.assertEquals(
         ImmutableSet.of(
-            new SegmentIdentifier(DATA_SOURCE, new Interval("2000/PT1H"), VERSION, new NumberedShardSpec(0, 0))
+            new SegmentIdentifier(DATA_SOURCE, Intervals.of("2000/PT1H"), VERSION, new NumberedShardSpec(0, 0))
         ),
         asIdentifiers(handedoffFromSequence0.getSegments())
     );
 
     Assert.assertEquals(
         ImmutableSet.of(
-            new SegmentIdentifier(DATA_SOURCE, new Interval("2000T01/PT1H"), VERSION, new NumberedShardSpec(0, 0))
+            new SegmentIdentifier(DATA_SOURCE, Intervals.of("2000T01/PT1H"), VERSION, new NumberedShardSpec(0, 0))
         ),
         asIdentifiers(handedoffFromSequence1.getSegments())
     );
@@ -408,20 +412,21 @@ public class AppenderatorDriverTest
 
     @Override
     public SegmentIdentifier allocate(
-        final DateTime timestamp,
+        final InputRow row,
         final String sequenceName,
         final String previousSegmentId
     ) throws IOException
     {
       synchronized (counters) {
-        final long timestampTruncated = granularity.bucketStart(timestamp).getMillis();
+        DateTime dateTimeTruncated = granularity.bucketStart(row.getTimestamp());
+        final long timestampTruncated = dateTimeTruncated.getMillis();
         if (!counters.containsKey(timestampTruncated)) {
           counters.put(timestampTruncated, new AtomicInteger());
         }
         final int partitionNum = counters.get(timestampTruncated).getAndIncrement();
         return new SegmentIdentifier(
             dataSource,
-            granularity.bucket(new DateTime(timestampTruncated)),
+            granularity.bucket(dateTimeTruncated),
             VERSION,
             new NumberedShardSpec(partitionNum, 0)
         );

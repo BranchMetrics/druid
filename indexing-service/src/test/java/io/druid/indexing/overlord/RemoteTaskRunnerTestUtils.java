@@ -32,13 +32,13 @@ import io.druid.indexing.common.TaskLocation;
 import io.druid.indexing.common.TaskStatus;
 import io.druid.indexing.common.TestUtils;
 import io.druid.indexing.common.task.Task;
-import io.druid.indexing.overlord.autoscaling.NoopResourceManagementStrategy;
-import io.druid.indexing.overlord.autoscaling.ResourceManagementStrategy;
+import io.druid.indexing.overlord.autoscaling.NoopProvisioningStrategy;
+import io.druid.indexing.overlord.autoscaling.ProvisioningStrategy;
 import io.druid.indexing.overlord.config.RemoteTaskRunnerConfig;
 import io.druid.indexing.overlord.setup.WorkerBehaviorConfig;
 import io.druid.indexing.worker.TaskAnnouncement;
 import io.druid.indexing.worker.Worker;
-import io.druid.java.util.common.concurrent.ScheduledExecutors;
+import io.druid.java.util.common.StringUtils;
 import io.druid.server.initialization.IndexerZkConfig;
 import io.druid.server.initialization.ZkPathsConfig;
 import org.apache.curator.framework.CuratorFramework;
@@ -47,7 +47,6 @@ import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.curator.test.TestingCluster;
 import org.apache.zookeeper.CreateMode;
 
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -56,10 +55,10 @@ public class RemoteTaskRunnerTestUtils
 {
   static final Joiner joiner = Joiner.on("/");
   static final String basePath = "/test/druid";
-  static final String announcementsPath = String.format("%s/indexer/announcements", basePath);
-  static final String tasksPath = String.format("%s/indexer/tasks", basePath);
-  static final String statusPath = String.format("%s/indexer/status", basePath);
-  static final TaskLocation DUMMY_LOCATION = TaskLocation.create("dummy", 9000);
+  static final String announcementsPath = StringUtils.format("%s/indexer/announcements", basePath);
+  static final String tasksPath = StringUtils.format("%s/indexer/tasks", basePath);
+  static final String statusPath = StringUtils.format("%s/indexer/status", basePath);
+  static final TaskLocation DUMMY_LOCATION = TaskLocation.create("dummy", 9000, -1);
 
   private TestingCluster testingCluster;
 
@@ -106,6 +105,15 @@ public class RemoteTaskRunnerTestUtils
 
   RemoteTaskRunner makeRemoteTaskRunner(RemoteTaskRunnerConfig config) throws Exception
   {
+    NoopProvisioningStrategy<WorkerTaskRunner> resourceManagement = new NoopProvisioningStrategy<>();
+    return makeRemoteTaskRunner(config, resourceManagement);
+  }
+
+  public RemoteTaskRunner makeRemoteTaskRunner(
+      RemoteTaskRunnerConfig config,
+      ProvisioningStrategy<WorkerTaskRunner> provisioningStrategy
+  )
+  {
     RemoteTaskRunner remoteTaskRunner = new TestableRemoteTaskRunner(
         jsonMapper,
         config,
@@ -117,14 +125,13 @@ public class RemoteTaskRunnerTestUtils
               {
                 return basePath;
               }
-            }, null, null, null, null, null
+            }, null, null, null, null
         ),
         cf,
         new PathChildrenCacheFactory.Builder(),
         null,
         DSuppliers.of(new AtomicReference<>(WorkerBehaviorConfig.defaultConfig())),
-        ScheduledExecutors.fixed(1, "Remote-Task-Runner-Cleanup--%d"),
-        new NoopResourceManagementStrategy<WorkerTaskRunner>()
+        provisioningStrategy
     );
 
     remoteTaskRunner.start();
@@ -134,6 +141,7 @@ public class RemoteTaskRunnerTestUtils
   Worker makeWorker(final String workerId, final int capacity) throws Exception
   {
     Worker worker = new Worker(
+        "http",
         workerId,
         workerId,
         capacity,
@@ -153,7 +161,7 @@ public class RemoteTaskRunnerTestUtils
   {
     cf.setData().forPath(
         joiner.join(announcementsPath, worker.getHost()),
-        jsonMapper.writeValueAsBytes(new Worker(worker.getHost(), worker.getIp(), worker.getCapacity(), ""))
+        jsonMapper.writeValueAsBytes(new Worker(worker.getScheme(), worker.getHost(), worker.getIp(), worker.getCapacity(), ""))
     );
   }
 
@@ -204,6 +212,12 @@ public class RemoteTaskRunnerTestUtils
               throw Throwables.propagate(e);
             }
           }
+
+          @Override
+          public String toString()
+          {
+            return StringUtils.format("Path[%s] exists", path);
+          }
         }
     );
   }
@@ -220,8 +234,7 @@ public class RemoteTaskRunnerTestUtils
         PathChildrenCacheFactory.Builder pathChildrenCacheFactory,
         HttpClient httpClient,
         Supplier<WorkerBehaviorConfig> workerConfigRef,
-        ScheduledExecutorService cleanupExec,
-        ResourceManagementStrategy<WorkerTaskRunner> resourceManagement
+        ProvisioningStrategy<WorkerTaskRunner> provisioningStrategy
     )
     {
       super(
@@ -232,8 +245,7 @@ public class RemoteTaskRunnerTestUtils
           pathChildrenCacheFactory,
           httpClient,
           workerConfigRef,
-          cleanupExec,
-          resourceManagement
+          provisioningStrategy
       );
     }
 

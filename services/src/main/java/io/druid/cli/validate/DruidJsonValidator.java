@@ -109,6 +109,7 @@ public class DruidJsonValidator extends GuiceRunnable
           {
             binder.bindConstant().annotatedWith(Names.named("serviceName")).to("druid/validator");
             binder.bindConstant().annotatedWith(Names.named("servicePort")).to(0);
+            binder.bindConstant().annotatedWith(Names.named("tlsServicePort")).to(-1);
           }
         }
     );
@@ -119,7 +120,7 @@ public class DruidJsonValidator extends GuiceRunnable
   {
     File file = new File(jsonFile);
     if (!file.exists()) {
-      System.out.printf("File[%s] does not exist.%n", file);
+      LOG.info("File[%s] does not exist.%n", file);
     }
 
     final Injector injector = makeInjector();
@@ -205,7 +206,7 @@ public class DruidJsonValidator extends GuiceRunnable
       }
     }
     catch (Exception e) {
-      System.out.println("INVALID JSON!");
+      LOG.error(e, "INVALID JSON!");
       throw Throwables.propagate(e);
     }
   }

@@ -91,7 +91,7 @@ public class ResetCluster extends GuiceRunnable
           public void configure(Binder binder)
           {
             JsonConfigProvider.bindInstance(
-                binder, Key.get(DruidNode.class, Self.class), new DruidNode("tools", "localhost", -1)
+                binder, Key.get(DruidNode.class, Self.class), new DruidNode("tools", "localhost", -1, null, true, false)
             );
             JsonConfigProvider.bind(binder, "druid.indexer.task", TaskConfig.class);
           }
@@ -162,7 +162,8 @@ public class ResetCluster extends GuiceRunnable
 
       DataSegmentKiller segmentKiller = injector.getInstance(DataSegmentKiller.class);
       segmentKiller.killAll();
-    } catch (Exception ex) {
+    }
+    catch (Exception ex) {
       log.error(ex, "Failed to cleanup Segment Files.");
     }
   }
@@ -176,7 +177,8 @@ public class ResetCluster extends GuiceRunnable
 
       TaskLogKiller taskLogKiller = injector.getInstance(TaskLogKiller.class);;
       taskLogKiller.killAll();
-    } catch (Exception ex) {
+    }
+    catch (Exception ex) {
       log.error(ex, "Failed to cleanup TaskLogs.");
     }
   }

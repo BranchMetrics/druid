@@ -105,7 +105,7 @@ public class CreateTables extends GuiceRunnable
                 binder, Key.get(MetadataStorageTablesConfig.class), MetadataStorageTablesConfig.fromBase(base)
             );
             JsonConfigProvider.bindInstance(
-                binder, Key.get(DruidNode.class, Self.class), new DruidNode("tools", "localhost", -1)
+                binder, Key.get(DruidNode.class, Self.class), new DruidNode("tools", "localhost", -1, null, true, false)
             );
           }
         }

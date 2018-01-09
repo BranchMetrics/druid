@@ -86,7 +86,7 @@ public class InsertSegment extends GuiceRunnable
           public void configure(Binder binder)
           {
             JsonConfigProvider.bindInstance(
-                binder, Key.get(DruidNode.class, Self.class), new DruidNode("tools", "localhost", -1)
+                binder, Key.get(DruidNode.class, Self.class), new DruidNode("tools", "localhost", -1, null, true, false)
             );
           }
         }

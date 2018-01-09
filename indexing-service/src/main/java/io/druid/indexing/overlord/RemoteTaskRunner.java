@@ -50,21 +50,25 @@ import com.metamx.http.client.response.InputStreamResponseHandler;
 import com.metamx.http.client.response.StatusResponseHandler;
 import com.metamx.http.client.response.StatusResponseHolder;
 import io.druid.concurrent.Execs;
+import io.druid.concurrent.LifecycleLock;
 import io.druid.curator.CuratorUtils;
 import io.druid.curator.cache.PathChildrenCacheFactory;
 import io.druid.indexing.common.TaskLocation;
 import io.druid.indexing.common.TaskStatus;
 import io.druid.indexing.common.task.Task;
-import io.druid.indexing.overlord.autoscaling.ResourceManagementStrategy;
+import io.druid.indexing.overlord.autoscaling.ProvisioningService;
+import io.druid.indexing.overlord.autoscaling.ProvisioningStrategy;
 import io.druid.indexing.overlord.autoscaling.ScalingStats;
 import io.druid.indexing.overlord.config.RemoteTaskRunnerConfig;
 import io.druid.indexing.overlord.setup.WorkerBehaviorConfig;
 import io.druid.indexing.overlord.setup.WorkerSelectStrategy;
 import io.druid.indexing.worker.TaskAnnouncement;
 import io.druid.indexing.worker.Worker;
+import io.druid.java.util.common.DateTimes;
 import io.druid.java.util.common.ISE;
 import io.druid.java.util.common.Pair;
 import io.druid.java.util.common.RE;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.concurrent.ScheduledExecutors;
 import io.druid.java.util.common.io.Closer;
 import io.druid.java.util.common.lifecycle.LifecycleStart;
@@ -81,7 +85,6 @@ import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.jboss.netty.handler.codec.http.HttpMethod;
 import org.jboss.netty.handler.codec.http.HttpResponseStatus;
-import org.joda.time.DateTime;
 import org.joda.time.Duration;
 import org.joda.time.Period;
 
@@ -104,7 +107,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -170,12 +172,13 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
 
   private final Object statusLock = new Object();
 
-  private volatile boolean started = false;
+  private final LifecycleLock lifecycleLock = new LifecycleLock();
 
   private final ListeningScheduledExecutorService cleanupExec;
 
   private final ConcurrentMap<String, ScheduledFuture> removedWorkerCleanups = new ConcurrentHashMap<>();
-  private final ResourceManagementStrategy<WorkerTaskRunner> resourceManagement;
+  private final ProvisioningStrategy<WorkerTaskRunner> provisioningStrategy;
+  private ProvisioningService provisioningService;
 
   public RemoteTaskRunner(
       ObjectMapper jsonMapper,
@@ -185,8 +188,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
       PathChildrenCacheFactory.Builder pathChildrenCacheFactory,
       HttpClient httpClient,
       Supplier<WorkerBehaviorConfig> workerConfigRef,
-      ScheduledExecutorService cleanupExec,
-      ResourceManagementStrategy<WorkerTaskRunner> resourceManagement
+      ProvisioningStrategy<WorkerTaskRunner> provisioningStrategy
   )
   {
     this.jsonMapper = jsonMapper;
@@ -202,8 +204,10 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
         .build();
     this.httpClient = httpClient;
     this.workerConfigRef = workerConfigRef;
-    this.cleanupExec = MoreExecutors.listeningDecorator(cleanupExec);
-    this.resourceManagement = resourceManagement;
+    this.cleanupExec = MoreExecutors.listeningDecorator(
+        ScheduledExecutors.fixed(1, "RemoteTaskRunner-Scheduled-Cleanup--%d")
+    );
+    this.provisioningStrategy = provisioningStrategy;
     this.runPendingTasksExec = Execs.multiThreaded(
         config.getPendingTasksRunnerNumThreads(),
         "rtr-pending-tasks-runner-%d"
@@ -214,11 +218,10 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
   @LifecycleStart
   public void start()
   {
+    if (!lifecycleLock.canStart()) {
+      return;
+    }
     try {
-      if (started) {
-        return;
-      }
-
       final MutableInt waitingFor = new MutableInt(1);
       final Object waitingForMonitor = new Object();
 
@@ -332,11 +335,14 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
           () -> checkBlackListedNodes()
       );
 
-      resourceManagement.startManagement(this);
-      started = true;
+      provisioningService = provisioningStrategy.makeProvisioningService(this);
+      lifecycleLock.started();
     }
     catch (Exception e) {
       throw Throwables.propagate(e);
+    }
+    finally {
+      lifecycleLock.exitStart();
     }
   }
 
@@ -344,13 +350,11 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
   @LifecycleStop
   public void stop()
   {
+    if (!lifecycleLock.canStop()) {
+      return;
+    }
     try {
-      if (!started) {
-        return;
-      }
-      started = false;
-
-      resourceManagement.stopManagement();
+      provisioningService.close();
 
       Closer closer = Closer.create();
       for (ZkWorker zkWorker : zkWorkers.values()) {
@@ -366,6 +370,10 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
 
       if (runPendingTasksExec != null) {
         runPendingTasksExec.shutdown();
+      }
+
+      if (cleanupExec != null) {
+        cleanupExec.shutdown();
       }
     }
     catch (Exception e) {
@@ -457,7 +465,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
   @Override
   public Optional<ScalingStats> getScalingStats()
   {
-    return Optional.fromNullable(resourceManagement.getStats());
+    return Optional.fromNullable(provisioningService.getStats());
   }
 
   public ZkWorker findWorkerRunningTask(String taskId)
@@ -515,8 +523,8 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
   @Override
   public void shutdown(final String taskId)
   {
-    if (!started) {
-      log.info("This TaskRunner is stopped. Ignoring shutdown command for task: %s", taskId);
+    if (!lifecycleLock.awaitStarted(1, TimeUnit.SECONDS)) {
+      log.info("This TaskRunner is stopped or not yet started. Ignoring shutdown command for task: %s", taskId);
     } else if (pendingTasks.remove(taskId) != null) {
       pendingTaskPayloads.remove(taskId);
       log.info("Removed task from pending queue: %s", taskId);
@@ -531,7 +539,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
       }
       URL url = null;
       try {
-        url = makeWorkerURL(zkWorker.getWorker(), String.format("/task/%s/shutdown", taskId));
+        url = makeWorkerURL(zkWorker.getWorker(), StringUtils.format("/task/%s/shutdown", taskId));
         final StatusResponseHolder response = httpClient.go(
             new Request(HttpMethod.POST, url),
             RESPONSE_HANDLER,
@@ -569,7 +577,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
       return Optional.absent();
     } else {
       // Worker is still running this task
-      final URL url = makeWorkerURL(zkWorker.getWorker(), String.format("/task/%s/log?offset=%d", taskId, offset));
+      final URL url = makeWorkerURL(zkWorker.getWorker(), StringUtils.format("/task/%s/log?offset=%d", taskId, offset));
       return Optional.<ByteSource>of(
           new ByteSource()
           {
@@ -601,7 +609,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
     Preconditions.checkArgument(path.startsWith("/"), "path must start with '/': %s", path);
 
     try {
-      return new URL(String.format("http://%s/druid/worker/v1%s", worker.getHost(), path));
+      return new URL(StringUtils.format("%s://%s/druid/worker/v1%s", worker.getScheme(), worker.getHost(), path));
     }
     catch (MalformedURLException e) {
       throw Throwables.propagate(e);
@@ -690,7 +698,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
    */
   private void cleanup(final String taskId)
   {
-    if (!started) {
+    if (!lifecycleLock.awaitStarted(1, TimeUnit.SECONDS)) {
       return;
     }
     final RemoteTaskRunnerWorkItem removed = completeTasks.remove(taskId);
@@ -745,7 +753,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
       }
 
       ZkWorker assignedWorker = null;
-      Optional<ImmutableWorkerInfo> immutableZkWorker = null;
+      final ImmutableWorkerInfo immutableZkWorker;
       try {
         synchronized (workersWithUnacknowledgedTask) {
           immutableZkWorker = strategy.findWorkerForTask(
@@ -779,10 +787,10 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
               task
           );
 
-          if (immutableZkWorker.isPresent() &&
-              workersWithUnacknowledgedTask.putIfAbsent(immutableZkWorker.get().getWorker().getHost(), task.getId())
-              == null) {
-            assignedWorker = zkWorkers.get(immutableZkWorker.get().getWorker().getHost());
+          if (immutableZkWorker != null &&
+              workersWithUnacknowledgedTask.putIfAbsent(immutableZkWorker.getWorker().getHost(), task.getId())
+                == null) {
+            assignedWorker = zkWorkers.get(immutableZkWorker.getWorker().getHost());
           }
         }
 
@@ -993,7 +1001,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
                       if (zkWorkers.putIfAbsent(worker.getHost(), zkWorker) == null) {
                         retVal.set(zkWorker);
                       } else {
-                        final String message = String.format(
+                        final String message = StringUtils.format(
                             "WTF?! Tried to add already-existing worker[%s]",
                             worker.getHost()
                         );
@@ -1173,7 +1181,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
           taskStatus.getStatusCode()
       );
       // Worker is done with this task
-      zkWorker.setLastCompletedTaskTime(new DateTime());
+      zkWorker.setLastCompletedTaskTime(DateTimes.nowUtc());
     } else {
       log.info("Workerless task[%s] completed with status[%s]", taskStatus.getId(), taskStatus.getStatusCode());
     }
@@ -1198,7 +1206,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
       synchronized (blackListedWorkers) {
         if (zkWorker.getContinuouslyFailedTasksCount() > config.getMaxRetriesBeforeBlacklist() &&
             blackListedWorkers.size() <= zkWorkers.size() * (config.getMaxPercentageBlacklistWorkers() / 100.0) - 1) {
-          zkWorker.setBlacklistedUntil(DateTime.now().plus(config.getWorkerBlackListBackoffTime()));
+          zkWorker.setBlacklistedUntil(DateTimes.nowUtc().plus(config.getWorkerBlackListBackoffTime()));
           if (blackListedWorkers.add(zkWorker)) {
             log.info(
                 "Blacklisting [%s] until [%s] after [%,d] failed tasks in a row.",
@@ -1239,7 +1247,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
           throw Throwables.propagate(e);
         }
       }
-      return ImmutableList.copyOf(getWorkerFromZK(lazyWorkers.values()));
+      return getWorkerFromZK(lazyWorkers.values());
     }
   }
 
@@ -1268,7 +1276,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
   @Override
   public Collection<Worker> getLazyWorkers()
   {
-    return ImmutableList.copyOf(getWorkerFromZK(lazyWorkers.values()));
+    return getWorkerFromZK(lazyWorkers.values());
   }
 
   private static ImmutableList<ImmutableWorkerInfo> getImmutableWorkerFromZK(Collection<ZkWorker> workers)
@@ -1276,7 +1284,7 @@ public class RemoteTaskRunner implements WorkerTaskRunner, TaskLogStreamer
     return ImmutableList.copyOf(Collections2.transform(workers, ZkWorker::toImmutable));
   }
 
-  public static Collection<Worker> getWorkerFromZK(Collection<ZkWorker> workers)
+  private static ImmutableList<Worker> getWorkerFromZK(Collection<ZkWorker> workers)
   {
     return ImmutableList.copyOf(Collections2.transform(workers, ZkWorker::getWorker));
   }
