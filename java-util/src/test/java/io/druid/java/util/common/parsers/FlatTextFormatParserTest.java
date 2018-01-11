@@ -75,7 +75,7 @@ public class FlatTextFormatParserTest
     final String header = concat(format, "time", "value1", "value2", "value2");
 
     expectedException.expect(ParseException.class);
-    expectedException.expectMessage(StringUtils.safeFormat("Unable to parse header [%s]", header));
+    expectedException.expectMessage(StringUtils.format("Unable to parse header [%s]", header));
 
     parserFactory.get(format, header);
   }
@@ -247,7 +247,7 @@ public class FlatTextFormatParserTest
     }
   }
 
-  private static String concat(FlatTextFormat format, String ... values)
+  private static String concat(FlatTextFormat format, String... values)
   {
     return Arrays.stream(values).collect(Collectors.joining(format.getDefaultDelimiter()));
   }

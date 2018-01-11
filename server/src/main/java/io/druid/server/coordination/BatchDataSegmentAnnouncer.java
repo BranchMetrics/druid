@@ -32,13 +32,14 @@ import com.google.common.util.concurrent.SettableFuture;
 import com.google.inject.Inject;
 import io.druid.common.utils.UUIDUtils;
 import io.druid.curator.announcement.Announcer;
+import io.druid.java.util.common.DateTimes;
 import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.server.initialization.BatchDataSegmentAnnouncerConfig;
 import io.druid.server.initialization.ZkPathsConfig;
 import io.druid.timeline.DataSegment;
 import org.apache.curator.utils.ZKPaths;
-import org.joda.time.DateTime;
 
 import javax.annotation.Nullable;
 import java.io.IOException;
@@ -114,7 +115,7 @@ public class BatchDataSegmentAnnouncer implements DataSegmentAnnouncer
   public void announceSegment(DataSegment segment) throws IOException
   {
     if (segmentLookup.containsKey(segment)) {
-      log.info("Skipping announcement of segment [%s]. Announcement exists already.");
+      log.info("Skipping announcement of segment [%s]. Announcement exists already.", segment.getIdentifier());
       return;
     }
 
@@ -222,7 +223,7 @@ public class BatchDataSegmentAnnouncer implements DataSegmentAnnouncer
       for (DataSegment ds : segments) {
 
         if (segmentLookup.containsKey(ds)) {
-          log.info("Skipping announcement of segment [%s]. Announcement exists already.");
+          log.info("Skipping announcement of segment [%s]. Announcement exists already.", ds.getIdentifier());
           return;
         }
 
@@ -312,14 +313,14 @@ public class BatchDataSegmentAnnouncer implements DataSegmentAnnouncer
             server.getHost(),
             server.getType().toString(),
             server.getTier(),
-            new DateTime().toString()
+            DateTimes.nowUtc().toString()
         )
     );
   }
 
   private String makeServedSegmentPath(String zNode)
   {
-    return ZKPaths.makePath(liveSegmentLocation, String.format("%s%s", zNode, counter.getAndIncrement()));
+    return ZKPaths.makePath(liveSegmentLocation, StringUtils.format("%s%s", zNode, counter.getAndIncrement()));
   }
 
   private class SegmentZNode implements Comparable<SegmentZNode>

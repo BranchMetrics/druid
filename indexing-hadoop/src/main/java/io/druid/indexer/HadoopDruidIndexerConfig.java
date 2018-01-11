@@ -22,7 +22,6 @@ package io.druid.indexer;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Function;
 import com.google.common.base.Joiner;
@@ -37,7 +36,6 @@ import com.google.inject.Binder;
 import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Module;
-import io.druid.common.utils.JodaUtils;
 import io.druid.data.input.InputRow;
 import io.druid.data.input.impl.InputRowParser;
 import io.druid.guice.GuiceInjectors;
@@ -46,11 +44,14 @@ import io.druid.guice.annotations.Self;
 import io.druid.indexer.partitions.PartitionsSpec;
 import io.druid.indexer.path.PathSpec;
 import io.druid.initialization.Initialization;
+import io.druid.java.util.common.DateTimes;
+import io.druid.java.util.common.JodaUtils;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.granularity.Granularity;
 import io.druid.java.util.common.guava.FunctionalIterable;
+import io.druid.java.util.common.jackson.JacksonUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.segment.IndexIO;
-import io.druid.segment.IndexMerger;
 import io.druid.segment.IndexMergerV9;
 import io.druid.segment.IndexSpec;
 import io.druid.segment.indexing.granularity.GranularitySpec;
@@ -92,7 +93,6 @@ public class HadoopDruidIndexerConfig
   public static final Joiner TAB_JOINER = Joiner.on("\t");
   public static final ObjectMapper JSON_MAPPER;
   public static final IndexIO INDEX_IO;
-  public static final IndexMerger INDEX_MERGER;
   public static final IndexMergerV9 INDEX_MERGER_V9;
   public static final HadoopKerberosConfig HADOOP_KERBEROS_CONFIG;
   public static final DataSegmentPusher DATA_SEGMENT_PUSHER;
@@ -110,7 +110,7 @@ public class HadoopDruidIndexerConfig
               public void configure(Binder binder)
               {
                 JsonConfigProvider.bindInstance(
-                    binder, Key.get(DruidNode.class, Self.class), new DruidNode("hadoop-indexer", null, null)
+                    binder, Key.get(DruidNode.class, Self.class), new DruidNode("hadoop-indexer", null, null, null, true, false)
                 );
                 JsonConfigProvider.bind(binder, "druid.hadoop.security.kerberos", HadoopKerberosConfig.class);
               }
@@ -120,7 +120,6 @@ public class HadoopDruidIndexerConfig
     );
     JSON_MAPPER = injector.getInstance(ObjectMapper.class);
     INDEX_IO = injector.getInstance(IndexIO.class);
-    INDEX_MERGER = injector.getInstance(IndexMerger.class);
     INDEX_MERGER_V9 = injector.getInstance(IndexMergerV9.class);
     HADOOP_KERBEROS_CONFIG = injector.getInstance(HadoopKerberosConfig.class);
     DATA_SEGMENT_PUSHER = injector.getInstance(DataSegmentPusher.class);
@@ -160,10 +159,8 @@ public class HadoopDruidIndexerConfig
   {
     try {
       return fromMap(
-          (Map<String, Object>) HadoopDruidIndexerConfig.JSON_MAPPER.readValue(
-              file, new TypeReference<Map<String, Object>>()
-              {
-              }
+          HadoopDruidIndexerConfig.JSON_MAPPER.readValue(
+              file, JacksonUtils.TYPE_REFERENCE_MAP_STRING_OBJECT
           )
       );
     }
@@ -178,10 +175,8 @@ public class HadoopDruidIndexerConfig
     // This is a map to try and prevent dependency screwbally-ness
     try {
       return fromMap(
-          (Map<String, Object>) HadoopDruidIndexerConfig.JSON_MAPPER.readValue(
-              str, new TypeReference<Map<String, Object>>()
-              {
-              }
+          HadoopDruidIndexerConfig.JSON_MAPPER.readValue(
+              str, JacksonUtils.TYPE_REFERENCE_MAP_STRING_OBJECT
           )
       );
     }
@@ -193,17 +188,14 @@ public class HadoopDruidIndexerConfig
   @SuppressWarnings("unchecked")
   public static HadoopDruidIndexerConfig fromDistributedFileSystem(String path)
   {
-    try
-    {
+    try {
       Path pt = new Path(path);
       FileSystem fs = pt.getFileSystem(new Configuration());
       Reader reader = new InputStreamReader(fs.open(pt), StandardCharsets.UTF_8);
 
       return fromMap(
-          (Map<String, Object>) HadoopDruidIndexerConfig.JSON_MAPPER.readValue(
-              reader, new TypeReference<Map<String, Object>>()
-              {
-              }
+          HadoopDruidIndexerConfig.JSON_MAPPER.readValue(
+              reader, JacksonUtils.TYPE_REFERENCE_MAP_STRING_OBJECT
           )
       );
     }
@@ -385,11 +377,6 @@ public class HadoopDruidIndexerConfig
     return schema.getTuningConfig().getShardSpecs().get(bucket.time.getMillis()).size();
   }
 
-  public boolean isBuildV9Directly()
-  {
-    return schema.getTuningConfig().getBuildV9Directly();
-  }
-
   /**
    * Job instance should have Configuration set (by calling {@link #addJobProperties(Job)}
    * or via injected system properties) before this method is called.  The {@link PathSpec} may
@@ -417,9 +404,7 @@ public class HadoopDruidIndexerConfig
   public Optional<Bucket> getBucket(InputRow inputRow)
   {
     final Optional<Interval> timeBucket = schema.getDataSchema().getGranularitySpec().bucketInterval(
-        new DateTime(
-            inputRow.getTimestampFromEpoch()
-        )
+        DateTimes.utc(inputRow.getTimestampFromEpoch())
     );
     if (!timeBucket.isPresent()) {
       return Optional.absent();
@@ -520,7 +505,7 @@ public class HadoopDruidIndexerConfig
   public Path makeIntermediatePath()
   {
     return new Path(
-        String.format(
+        StringUtils.format(
             "%s/%s/%s_%s",
             getWorkingPath(),
             schema.getDataSchema().getDataSource(),
@@ -533,7 +518,7 @@ public class HadoopDruidIndexerConfig
   public Path makeSegmentPartitionInfoPath(Interval bucketInterval)
   {
     return new Path(
-        String.format(
+        StringUtils.format(
             "%s/%s_%s/partitions.json",
             makeIntermediatePath(),
             ISODateTimeFormat.basicDateTime().print(bucketInterval.getStart()),
@@ -545,7 +530,7 @@ public class HadoopDruidIndexerConfig
   public Path makeIntervalInfoPath()
   {
     return new Path(
-        String.format(
+        StringUtils.format(
             "%s/intervals.json",
             makeIntermediatePath()
         )
@@ -564,13 +549,16 @@ public class HadoopDruidIndexerConfig
 
   public Path makeDescriptorInfoPath(DataSegment segment)
   {
-    return new Path(makeDescriptorInfoDir(), String.format("%s.json", segment.getIdentifier().replace(":", "")));
+    return new Path(makeDescriptorInfoDir(), StringUtils.format("%s.json", segment.getIdentifier().replace(":", "")));
   }
 
   public void addJobProperties(Job job)
   {
-    Configuration conf = job.getConfiguration();
+    addJobProperties(job.getConfiguration());
+  }
 
+  public void addJobProperties(Configuration conf)
+  {
     for (final Map.Entry<String, String> entry : schema.getTuningConfig().getJobProperties().entrySet()) {
       conf.set(entry.getKey(), entry.getValue());
     }

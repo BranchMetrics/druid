@@ -25,16 +25,14 @@ import io.druid.query.DefaultBitmapResultFactory;
 import io.druid.segment.ColumnSelector;
 import io.druid.segment.ColumnSelectorFactory;
 
-/**
- * {@link #getBitmapIndex} and {@link #getBitmapResult} methods both have default implementations, delegating to each
- * other. Every implementation of {@link Filter} should override {@link #getBitmapResult}, currently it has a default
- * implementation for compatibility with Filters in extensions. In Druid 0.11 {@link #getBitmapResult} is going to
- * become an abstract method without a default implementation.
- */
 public interface Filter
 {
   /**
-   * Get a bitmap index, indicating rows that match this filter.
+   * Get a bitmap index, indicating rows that match this filter. Do not call this method unless
+   * {@link #supportsBitmapIndex(BitmapIndexSelector)} returns true. Behavior in the case that
+   * {@link #supportsBitmapIndex(BitmapIndexSelector)} returns false is undefined.
+   *
+   * This method is OK to be called, but generally should not be overridden, override {@link #getBitmapResult} instead.
    *
    * @param selector Object used to retrieve bitmap indexes
    *
@@ -47,14 +45,22 @@ public interface Filter
     return getBitmapResult(selector, new DefaultBitmapResultFactory(selector.getBitmapFactory()));
   }
 
-  default <T> T getBitmapResult(BitmapIndexSelector selector, BitmapResultFactory<T> bitmapResultFactory)
-  {
-    return bitmapResultFactory.wrapUnknown(getBitmapIndex(selector));
-  }
+  /**
+   * Get a (possibly wrapped) bitmap index, indicating rows that match this filter. Do not call this method unless
+   * {@link #supportsBitmapIndex(BitmapIndexSelector)} returns true. Behavior in the case that
+   * {@link #supportsBitmapIndex(BitmapIndexSelector)} returns false is undefined.
+   *
+   * @param selector Object used to retrieve bitmap indexes
+   *
+   * @return A bitmap indicating rows that match this filter.
+   *
+   * @see Filter#estimateSelectivity(BitmapIndexSelector)
+   */
+  <T> T getBitmapResult(BitmapIndexSelector selector, BitmapResultFactory<T> bitmapResultFactory);
 
   /**
    * Estimate selectivity of this filter.
-   * This method can be used for cost-based query planning like in {@link io.druid.query.search.search.AutoStrategy}.
+   * This method can be used for cost-based query planning like in {@link io.druid.query.search.AutoStrategy}.
    * To avoid significant performance degradation for calculating the exact cost,
    * implementation of this method targets to achieve rapid selectivity estimation
    * with reasonable sacrifice of the accuracy.

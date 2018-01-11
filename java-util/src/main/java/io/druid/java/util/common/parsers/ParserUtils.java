@@ -23,16 +23,34 @@ import com.google.common.base.Function;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.Sets;
-import org.joda.time.DateTime;
+import io.druid.java.util.common.StringUtils;
+import org.joda.time.DateTimeZone;
 
+import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 public class ParserUtils
 {
   private static final String DEFAULT_COLUMN_NAME_PREFIX = "column_";
+
+  private static final Map<String, DateTimeZone> TIMEZONE_LOOKUP = new HashMap<>();
+
+  static {
+    for (String tz : TimeZone.getAvailableIDs()) {
+      try {
+        TIMEZONE_LOOKUP.put(tz, DateTimeZone.forTimeZone(TimeZone.getTimeZone(tz)));
+      }
+      catch (IllegalArgumentException e) {
+        // Ignore certain date time zone ids like SystemV/AST4. More here https://confluence.atlassian.com/confkb/the-datetime-zone-id-is-not-recognised-167183146.html
+      }
+    }
+  }
 
   public static Function<String, Object> getMultiValueFunction(
       final String listDelimiter,
@@ -59,26 +77,13 @@ public class ParserUtils
     return names;
   }
 
-  /**
-   * Factored timestamp parsing into its own Parser class, but leaving this here
-   * for compatibility
-   *
-   * @param format
-   *
-   * @return
-   */
-  public static Function<String, DateTime> createTimestampParser(final String format)
-  {
-    return TimestampParser.createTimestampParser(format);
-  }
-
   public static Set<String> findDuplicates(Iterable<String> fieldNames)
   {
     Set<String> duplicates = Sets.newHashSet();
     Set<String> uniqueNames = Sets.newHashSet();
 
     for (String fieldName : fieldNames) {
-      String next = fieldName.toLowerCase();
+      String next = StringUtils.toLowerCase(fieldName);
       if (uniqueNames.contains(next)) {
         duplicates.add(next);
       }
@@ -103,6 +108,12 @@ public class ParserUtils
       input = input.substring(1, input.length() - 1).trim();
     }
     return input;
+  }
+
+  @Nullable
+  public static DateTimeZone getDateTimeZone(String timeZone)
+  {
+    return TIMEZONE_LOOKUP.get(timeZone);
   }
 
   /**

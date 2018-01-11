@@ -33,7 +33,8 @@ import com.google.inject.Binder;
 import com.google.inject.Guice;
 import com.google.inject.Module;
 import com.metamx.emitter.service.ServiceEmitter;
-import io.druid.common.utils.JodaUtils;
+import io.druid.java.util.common.Intervals;
+import io.druid.java.util.common.JodaUtils;
 import io.druid.data.input.InputRow;
 import io.druid.data.input.impl.DimensionsSpec;
 import io.druid.data.input.impl.InputRowParser;
@@ -54,13 +55,14 @@ import io.druid.indexing.common.config.TaskStorageConfig;
 import io.druid.indexing.overlord.HeapMemoryTaskStorage;
 import io.druid.indexing.overlord.TaskLockbox;
 import io.druid.indexing.overlord.supervisor.SupervisorManager;
+import io.druid.java.util.common.IOE;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.metadata.IndexerSQLMetadataStorageCoordinator;
 import io.druid.query.aggregation.DoubleSumAggregatorFactory;
 import io.druid.query.aggregation.LongSumAggregatorFactory;
 import io.druid.query.filter.SelectorDimFilter;
 import io.druid.segment.IndexIO;
-import io.druid.segment.IndexMerger;
 import io.druid.segment.IndexMergerV9;
 import io.druid.segment.IndexSpec;
 import io.druid.segment.incremental.IncrementalIndex;
@@ -108,14 +110,12 @@ import java.util.Set;
 public class IngestSegmentFirehoseFactoryTest
 {
   private static final ObjectMapper MAPPER;
-  private static final IndexMerger INDEX_MERGER;
   private static final IndexMergerV9 INDEX_MERGER_V9;
   private static final IndexIO INDEX_IO;
 
   static {
     TestUtils testUtils = new TestUtils();
     MAPPER = setupInjectablesInObjectMapper(testUtils.getTestObjectMapper());
-    INDEX_MERGER = testUtils.getTestIndexMerger();
     INDEX_MERGER_V9 = testUtils.getTestIndexMergerV9();
     INDEX_IO = testUtils.getTestIndexIO();
   }
@@ -148,9 +148,9 @@ public class IngestSegmentFirehoseFactoryTest
     }
 
     if (!persistDir.mkdirs() && !persistDir.exists()) {
-      throw new IOException(String.format("Could not create directory at [%s]", persistDir.getAbsolutePath()));
+      throw new IOE("Could not create directory at [%s]", persistDir.getAbsolutePath());
     }
-    INDEX_MERGER.persist(index, persistDir, indexSpec);
+    INDEX_MERGER_V9.persist(index, persistDir, indexSpec);
 
     final TaskLockbox tl = new TaskLockbox(ts);
     final IndexerSQLMetadataStorageCoordinator mdc = new IndexerSQLMetadataStorageCoordinator(null, null, null)
@@ -290,11 +290,14 @@ public class IngestSegmentFirehoseFactoryTest
             )
         ),
         MAPPER,
-        INDEX_MERGER,
         INDEX_IO,
         null,
         null,
-        INDEX_MERGER_V9
+        INDEX_MERGER_V9,
+        null,
+        null,
+        null,
+        null
     );
     Collection<Object[]> values = new LinkedList<>();
     for (InputRowParser parser : Arrays.<InputRowParser>asList(
@@ -321,7 +324,7 @@ public class IngestSegmentFirehoseFactoryTest
               new Object[]{
                   new IngestSegmentFirehoseFactory(
                       DATA_SOURCE_NAME,
-                      FOREVER,
+                      Intervals.ETERNITY,
                       new SelectorDimFilter(DIM_NAME, DIM_VALUE, null),
                       dim_names,
                       metric_names,
@@ -337,7 +340,7 @@ public class IngestSegmentFirehoseFactoryTest
                       ),
                       INDEX_IO
                   ),
-                  String.format(
+                  StringUtils.format(
                       "DimNames[%s]MetricNames[%s]ParserDimNames[%s]",
                       dim_names == null ? "null" : "dims",
                       metric_names == null ? "null" : "metrics",
@@ -397,7 +400,6 @@ public class IngestSegmentFirehoseFactoryTest
   }
 
   private static final Logger log = new Logger(IngestSegmentFirehoseFactoryTest.class);
-  private static final Interval FOREVER = new Interval(JodaUtils.MIN_INSTANT, JodaUtils.MAX_INSTANT);
   private static final String DATA_SOURCE_NAME = "testDataSource";
   private static final String DATA_SOURCE_VERSION = "version";
   private static final Integer BINARY_VERSION = -1;
@@ -448,7 +450,7 @@ public class IngestSegmentFirehoseFactoryTest
     Preconditions.checkArgument(shardNumber >= 0);
     return new DataSegment(
         DATA_SOURCE_NAME,
-        FOREVER,
+        Intervals.ETERNITY,
         DATA_SOURCE_VERSION,
         ImmutableMap.<String, Object>of(
             "type", "local",
@@ -504,7 +506,7 @@ public class IngestSegmentFirehoseFactoryTest
     if (factory.getDimensions() != null) {
       Assert.assertArrayEquals(new String[]{DIM_NAME}, factory.getDimensions().toArray());
     }
-    Assert.assertEquals(FOREVER, factory.getInterval());
+    Assert.assertEquals(Intervals.ETERNITY, factory.getInterval());
     if (factory.getMetrics() != null) {
       Assert.assertEquals(
           ImmutableSet.of(METRIC_LONG_NAME, METRIC_FLOAT_NAME),

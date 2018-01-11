@@ -70,6 +70,7 @@ import io.druid.query.topn.TopNQueryRunnerFactory;
 import io.druid.segment.ColumnSelectorFactory;
 import io.druid.segment.IndexIO;
 import io.druid.segment.IndexMerger;
+import io.druid.segment.IndexMergerV9;
 import io.druid.segment.IndexSpec;
 import io.druid.segment.QueryableIndex;
 import io.druid.segment.QueryableIndexSegment;
@@ -126,7 +127,7 @@ public class AggregationTestHelper
     this.factory = factory;
     this.tempFolder = tempFolder;
 
-    for(Module mod : jsonModulesToRegister) {
+    for (Module mod : jsonModulesToRegister) {
       mapper.registerModule(mod);
     }
   }
@@ -154,7 +155,7 @@ public class AggregationTestHelper
 
     return new AggregationTestHelper(
         mapper,
-        new IndexMerger(mapper, indexIO),
+        new IndexMergerV9(mapper, indexIO),
         indexIO,
         factory.getToolchest(),
         factory,
@@ -210,7 +211,7 @@ public class AggregationTestHelper
 
     return new AggregationTestHelper(
         mapper,
-        new IndexMerger(mapper, indexIO),
+        new IndexMergerV9(mapper, indexIO),
         indexIO,
         toolchest,
         factory,
@@ -250,7 +251,7 @@ public class AggregationTestHelper
 
     return new AggregationTestHelper(
         mapper,
-        new IndexMerger(mapper, indexIO),
+        new IndexMergerV9(mapper, indexIO),
         indexIO,
         toolchest,
         factory,
@@ -279,7 +280,7 @@ public class AggregationTestHelper
               @Override
               public ByteBuffer get()
               {
-                return ByteBuffer.allocate(10*1024*1024);
+                return ByteBuffer.allocate(10 * 1024 * 1024);
               }
             }
         ),
@@ -301,7 +302,7 @@ public class AggregationTestHelper
 
     return new AggregationTestHelper(
         mapper,
-        new IndexMerger(mapper, indexIO),
+        new IndexMergerV9(mapper, indexIO),
         indexIO,
         toolchest,
         factory,
@@ -506,8 +507,9 @@ public class AggregationTestHelper
 
     try {
       return runQueryOnSegmentsObjs(segments, query);
-    } finally {
-      for(Segment segment: segments) {
+    }
+    finally {
+      for (Segment segment : segments) {
         CloseQuietly.close(segment);
       }
     }
@@ -549,7 +551,7 @@ public class AggregationTestHelper
         toolChest
     );
 
-    return baseRunner.run(query, Maps.newHashMap());
+    return baseRunner.run(QueryPlus.wrap(query), Maps.newHashMap());
   }
 
   public QueryRunner<Row> makeStringSerdeQueryRunner(final ObjectMapper mapper, final QueryToolChest toolChest, final Query<Row> query, final QueryRunner<Row> baseRunner)
@@ -586,7 +588,8 @@ public class AggregationTestHelper
               )
           );
           return Sequences.simple(resultRows);
-        } catch(Exception ex) {
+        }
+        catch (Exception ex) {
           throw Throwables.propagate(ex);
         }
       }
@@ -605,7 +608,7 @@ public class AggregationTestHelper
 
     ObjectCodec objectCodec = jp.getCodec();
 
-    while(jp.nextToken() != JsonToken.END_ARRAY) {
+    while (jp.nextToken() != JsonToken.END_ARRAY) {
       result.add(objectCodec.readValue(jp, toolChest.getResultTypeReference()));
     }
     return result;

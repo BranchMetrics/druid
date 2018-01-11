@@ -195,15 +195,9 @@ public class CompressedVSizeIndexedSupplier implements WritableSupplier<IndexedM
         public int get(int index)
         {
           if (index >= size) {
-            throw new IllegalArgumentException(String.format("Index[%s] >= size[%s]", index, size));
+            throw new IAE("Index[%d] >= size[%d]", index, size);
           }
           return values.get(index + offset);
-        }
-
-        @Override
-        public void fill(int index, int[] toFill)
-        {
-          throw new UnsupportedOperationException("fill not supported");
         }
 
         @Override

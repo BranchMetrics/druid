@@ -22,7 +22,6 @@ package io.druid.client;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.ObjectCodec;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.type.TypeFactory;
@@ -51,6 +50,7 @@ import io.druid.java.util.common.guava.BaseSequence;
 import io.druid.java.util.common.guava.CloseQuietly;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Sequences;
+import io.druid.java.util.common.jackson.JacksonUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.query.BySegmentResultValueClass;
 import io.druid.query.Query;
@@ -110,13 +110,17 @@ public class DirectDruidClient<T> implements QueryRunner<T>
   private final QueryWatcher queryWatcher;
   private final ObjectMapper objectMapper;
   private final HttpClient httpClient;
+  private final String scheme;
   private final String host;
   private final ServiceEmitter emitter;
 
   private final AtomicInteger openConnections;
   private final boolean isSmile;
 
-  public static <T, QueryType extends Query<T>> QueryType withDefaultTimeoutAndMaxScatterGatherBytes(final QueryType query, ServerConfig serverConfig)
+  public static <T, QueryType extends Query<T>> QueryType withDefaultTimeoutAndMaxScatterGatherBytes(
+      final QueryType query,
+      ServerConfig serverConfig
+  )
   {
     return (QueryType) QueryContexts.withMaxScatterGatherBytes(
         QueryContexts.withDefaultTimeout(
@@ -125,6 +129,15 @@ public class DirectDruidClient<T> implements QueryRunner<T>
         ),
         serverConfig.getMaxScatterGatherBytes()
     );
+  }
+
+  /**
+   * Removes the magical fields added by {@link #makeResponseContextForQuery(Query, long)}.
+   */
+  public static void removeMagicResponseContextFields(Map<String, Object> responseContext)
+  {
+    responseContext.remove(DirectDruidClient.QUERY_FAIL_TIME);
+    responseContext.remove(DirectDruidClient.QUERY_TOTAL_BYTES_GATHERED);
   }
 
   public static Map<String, Object> makeResponseContextForQuery(Query query, long startTimeMillis)
@@ -146,6 +159,7 @@ public class DirectDruidClient<T> implements QueryRunner<T>
       QueryWatcher queryWatcher,
       ObjectMapper objectMapper,
       HttpClient httpClient,
+      String scheme,
       String host,
       ServiceEmitter emitter
   )
@@ -154,6 +168,7 @@ public class DirectDruidClient<T> implements QueryRunner<T>
     this.queryWatcher = queryWatcher;
     this.objectMapper = objectMapper;
     this.httpClient = httpClient;
+    this.scheme = scheme;
     this.host = host;
     this.emitter = emitter;
 
@@ -192,8 +207,8 @@ public class DirectDruidClient<T> implements QueryRunner<T>
     }
 
     final ListenableFuture<InputStream> future;
-    final String url = String.format("http://%s/druid/v2/", host);
-    final String cancelUrl = String.format("http://%s/druid/v2/%s", host, query.getId());
+    final String url = StringUtils.format("%s://%s/druid/v2/", scheme, host);
+    final String cancelUrl = StringUtils.format("%s://%s/druid/v2/%s", scheme, host, query.getId());
 
     try {
       log.debug("Querying queryId[%s] url[%s]", query.getId(), url);
@@ -239,9 +254,7 @@ public class DirectDruidClient<T> implements QueryRunner<T>
             if (responseContext != null) {
               context.putAll(
                   objectMapper.<Map<String, Object>>readValue(
-                      responseContext, new TypeReference<Map<String, Object>>()
-                      {
-                      }
+                      responseContext, JacksonUtils.TYPE_REFERENCE_MAP_STRING_OBJECT
                   )
               );
             }
@@ -379,7 +392,7 @@ public class DirectDruidClient<T> implements QueryRunner<T>
         @Override
         public void exceptionCaught(final ClientResponse<InputStream> clientResponse, final Throwable e)
         {
-          String msg = StringUtils.safeFormat(
+          String msg = StringUtils.format(
               "Query[%s] url[%s] failed with exception msg [%s]",
               query.getId(),
               url,
@@ -412,7 +425,7 @@ public class DirectDruidClient<T> implements QueryRunner<T>
         {
           long timeLeft = timeoutAt - System.currentTimeMillis();
           if (timeLeft <= 0) {
-            String msg = StringUtils.safeFormat("Query[%s] url[%s] timed out.", query.getId(), url);
+            String msg = StringUtils.format("Query[%s] url[%s] timed out.", query.getId(), url);
             setupResponseReadFailure(msg, null);
             throw new RE(msg);
           } else {
@@ -423,7 +436,7 @@ public class DirectDruidClient<T> implements QueryRunner<T>
         private void checkTotalBytesLimit(long bytes)
         {
           if (maxScatterGatherBytes < Long.MAX_VALUE && totalBytesGathered.addAndGet(bytes) > maxScatterGatherBytes) {
-            String msg = StringUtils.safeFormat(
+            String msg = StringUtils.format(
                 "Query[%s] url[%s] max scatter-gather bytes limit reached.",
                 query.getId(),
                 url

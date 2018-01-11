@@ -25,6 +25,7 @@ import com.google.inject.Inject;
 import com.metamx.http.client.HttpClient;
 import io.druid.curator.discovery.ServerDiscoveryFactory;
 import io.druid.curator.discovery.ServerDiscoverySelector;
+import io.druid.java.util.common.DateTimes;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.testing.IntegrationTestingConfig;
 import io.druid.testing.clients.EventReceiverFirehoseTestClient;
@@ -63,13 +64,13 @@ public class ITUnionQueryTest extends AbstractIndexerTest
   @Test
   public void testUnionQuery() throws Exception
   {
-    final int numTasks = 4;
+    final int numTasks = 3;
 
     try {
       // Load 4 datasources with same dimensions
       String task = setShutOffTime(
           getTaskAsString(UNION_TASK_RESOURCE),
-          new DateTime(System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(3))
+          DateTimes.utc(System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(3))
       );
       List<String> taskIDs = Lists.newArrayList();
       for (int i = 0; i < numTasks; i++) {

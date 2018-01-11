@@ -38,6 +38,7 @@ import io.druid.collections.Releaser;
 import io.druid.data.input.Row;
 import io.druid.java.util.common.ISE;
 import io.druid.java.util.common.Pair;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.guava.Accumulator;
 import io.druid.java.util.common.guava.BaseSequence;
 import io.druid.java.util.common.guava.CloseQuietly;
@@ -82,6 +83,7 @@ public class GroupByMergingQueryRunnerV2 implements QueryRunner<Row>
   private final BlockingPool<ByteBuffer> mergeBufferPool;
   private final ObjectMapper spillMapper;
   private final String processingTmpDir;
+  private final int mergeBufferSize;
 
   public GroupByMergingQueryRunnerV2(
       GroupByQueryConfig config,
@@ -90,6 +92,7 @@ public class GroupByMergingQueryRunnerV2 implements QueryRunner<Row>
       Iterable<QueryRunner<Row>> queryables,
       int concurrencyHint,
       BlockingPool<ByteBuffer> mergeBufferPool,
+      int mergeBufferSize,
       ObjectMapper spillMapper,
       String processingTmpDir
   )
@@ -102,6 +105,7 @@ public class GroupByMergingQueryRunnerV2 implements QueryRunner<Row>
     this.mergeBufferPool = mergeBufferPool;
     this.spillMapper = spillMapper;
     this.processingTmpDir = processingTmpDir;
+    this.mergeBufferSize = mergeBufferSize;
   }
 
   @Override
@@ -139,7 +143,7 @@ public class GroupByMergingQueryRunnerV2 implements QueryRunner<Row>
 
     final File temporaryStorageDirectory = new File(
         processingTmpDir,
-        String.format("druid-groupBy-%s_%s", UUID.randomUUID(), query.getId())
+        StringUtils.format("druid-groupBy-%s_%s", UUID.randomUUID(), query.getId())
     );
 
     final int priority = QueryContexts.getPriority(query);
@@ -193,7 +197,12 @@ public class GroupByMergingQueryRunnerV2 implements QueryRunner<Row>
                   concurrencyHint,
                   temporaryStorage,
                   spillMapper,
-                  combiningAggregatorFactories
+                  combiningAggregatorFactories,
+                  exec,
+                  priority,
+                  hasTimeout,
+                  timeoutAt,
+                  mergeBufferSize
               );
               final Grouper<RowBasedKey> grouper = pair.lhs;
               final Accumulator<AggregateResult, Row> accumulator = pair.rhs;

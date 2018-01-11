@@ -89,7 +89,8 @@ public class ImmutableWorkerInfo
     return availabilityGroups;
   }
 
-  public int getAvailableCapacity() {
+  public int getAvailableCapacity()
+  {
     return getWorker().getCapacity() - getCurrCapacityUsed();
   }
 

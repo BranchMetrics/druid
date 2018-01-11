@@ -25,6 +25,7 @@ import com.google.inject.Provides;
 import com.google.inject.ProvisionException;
 import com.google.inject.util.Providers;
 import io.druid.client.DruidServerConfig;
+import io.druid.discovery.DataNodeService;
 import io.druid.guice.annotations.Self;
 import io.druid.query.DruidProcessingConfig;
 import io.druid.segment.column.ColumnConfig;
@@ -57,11 +58,31 @@ public class StorageNodeModule implements Module
     }
 
     return new DruidServerMetadata(
+        node.getHostAndPortToUse(),
         node.getHostAndPort(),
-        node.getHostAndPort(),
+        node.getHostAndTlsPort(),
         config.getMaxSize(),
         nodeType.getNodeType(),
         config.getTier(),
+        config.getPriority()
+    );
+  }
+
+  @Provides
+  @LazySingleton
+  public DataNodeService getDataNodeService(
+      @Nullable NodeTypeConfig nodeType,
+      DruidServerConfig config
+  )
+  {
+    if (nodeType == null) {
+      throw new ProvisionException("Must override the binding for NodeTypeConfig if you want a DruidServerMetadata.");
+    }
+
+    return new DataNodeService(
+        config.getTier(),
+        config.getMaxSize(),
+        nodeType.getNodeType(),
         config.getPriority()
     );
   }

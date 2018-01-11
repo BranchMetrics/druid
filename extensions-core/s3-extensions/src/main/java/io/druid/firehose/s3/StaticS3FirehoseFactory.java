@@ -27,6 +27,7 @@ import io.druid.data.input.impl.PrefetchableTextFilesFirehoseFactory;
 import io.druid.java.util.common.CompressionUtils;
 import io.druid.java.util.common.IAE;
 import io.druid.java.util.common.logger.Logger;
+import org.jets3t.service.S3ServiceException;
 import org.jets3t.service.ServiceException;
 import org.jets3t.service.StorageObjectsChunk;
 import org.jets3t.service.impl.rest.httpclient.RestS3Service;
@@ -39,6 +40,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -71,11 +73,11 @@ public class StaticS3FirehoseFactory extends PrefetchableTextFilesFirehoseFactor
     this.prefixes = prefixes == null ? new ArrayList<>() : prefixes;
 
     if (!this.uris.isEmpty() && !this.prefixes.isEmpty()) {
-      throw new IAE("uris and directories cannot be used together");
+      throw new IAE("uris and prefixes cannot be used together");
     }
 
     if (this.uris.isEmpty() && this.prefixes.isEmpty()) {
-      throw new IAE("uris or directories must be specified");
+      throw new IAE("uris or prefixes must be specified");
     }
 
     for (final URI inputURI : this.uris) {
@@ -131,12 +133,36 @@ public class StaticS3FirehoseFactory extends PrefetchableTextFilesFirehoseFactor
                 MAX_LISTING_LENGTH,
                 lastKey
             );
-            Arrays.stream(objectsChunk.getObjects()).forEach(storageObject -> objects.add((S3Object) storageObject));
+            Arrays.stream(objectsChunk.getObjects())
+                  .filter(storageObject -> !storageObject.isDirectoryPlaceholder())
+                  .forEach(storageObject -> objects.add((S3Object) storageObject));
             lastKey = objectsChunk.getPriorLastKey();
           } while (!objectsChunk.isListingComplete());
         }
-        catch (ServiceException  e) {
-          throw new IOException(e);
+        catch (ServiceException outerException) {
+          log.error(outerException, "Exception while listing on %s", uri);
+
+          if (outerException.getResponseCode() == 403) {
+            // The "Access Denied" means users might not have a proper permission for listing on the given uri.
+            // Usually this is not a problem, but the uris might be the full paths to input objects instead of prefixes.
+            // In this case, users should be able to get objects if they have a proper permission for GetObject.
+
+            log.warn("Access denied for %s. Try to get the object from the uri without listing", uri);
+            try {
+              final S3Object s3Object = s3Client.getObject(bucket, prefix);
+              if (!s3Object.isDirectoryPlaceholder()) {
+                objects.add(s3Object);
+              } else {
+                throw new IOException(uri + " is a directory placeholder, "
+                                      + "but failed to get the object list under the directory due to permission");
+              }
+            }
+            catch (S3ServiceException innerException) {
+              throw new IOException(innerException);
+            }
+          } else {
+            throw new IOException(outerException);
+          }
         }
       }
       return objects;
@@ -180,15 +206,28 @@ public class StaticS3FirehoseFactory extends PrefetchableTextFilesFirehoseFactor
       return false;
     }
 
-    StaticS3FirehoseFactory factory = (StaticS3FirehoseFactory) o;
+    StaticS3FirehoseFactory that = (StaticS3FirehoseFactory) o;
 
-    return getUris().equals(factory.getUris());
-
+    return Objects.equals(uris, that.uris) &&
+           Objects.equals(prefixes, that.prefixes) &&
+           getMaxCacheCapacityBytes() == that.getMaxCacheCapacityBytes() &&
+           getMaxFetchCapacityBytes() == that.getMaxFetchCapacityBytes() &&
+           getPrefetchTriggerBytes() == that.getPrefetchTriggerBytes() &&
+           getFetchTimeout() == that.getFetchTimeout() &&
+           getMaxFetchRetry() == that.getMaxFetchRetry();
   }
 
   @Override
   public int hashCode()
   {
-    return getUris().hashCode();
+    return Objects.hash(
+        uris,
+        prefixes,
+        getMaxCacheCapacityBytes(),
+        getMaxFetchCapacityBytes(),
+        getPrefetchTriggerBytes(),
+        getFetchTimeout(),
+        getMaxFetchRetry()
+    );
   }
 }

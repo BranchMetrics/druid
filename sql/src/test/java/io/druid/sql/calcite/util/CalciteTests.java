@@ -25,11 +25,14 @@ import com.google.common.base.Suppliers;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Maps;
 import com.google.inject.Binder;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Module;
+import com.metamx.emitter.core.NoopEmitter;
+import com.metamx.emitter.service.ServiceEmitter;
 import io.druid.collections.StupidPool;
 import io.druid.data.input.InputRow;
 import io.druid.data.input.impl.DimensionsSpec;
@@ -40,29 +43,36 @@ import io.druid.data.input.impl.TimestampSpec;
 import io.druid.guice.ExpressionModule;
 import io.druid.guice.annotations.Json;
 import io.druid.math.expr.ExprMacroTable;
+import io.druid.query.DefaultGenericQueryMetricsFactory;
 import io.druid.query.DefaultQueryRunnerFactoryConglomerate;
 import io.druid.query.DruidProcessingConfig;
 import io.druid.query.Query;
 import io.druid.query.QueryRunnerFactory;
 import io.druid.query.QueryRunnerFactoryConglomerate;
 import io.druid.query.QueryRunnerTestHelper;
+import io.druid.query.QuerySegmentWalker;
+import io.druid.query.QueryToolChest;
+import io.druid.query.QueryToolChestWarehouse;
 import io.druid.query.aggregation.CountAggregatorFactory;
 import io.druid.query.aggregation.DoubleSumAggregatorFactory;
+import io.druid.query.aggregation.FloatSumAggregatorFactory;
 import io.druid.query.aggregation.hyperloglog.HyperUniquesAggregatorFactory;
-import io.druid.query.extraction.MapLookupExtractor;
+import io.druid.query.expression.LookupExprMacro;
+import io.druid.query.expression.TestExpressionMacroTable;
 import io.druid.query.groupby.GroupByQuery;
 import io.druid.query.groupby.GroupByQueryConfig;
 import io.druid.query.groupby.GroupByQueryRunnerTest;
 import io.druid.query.groupby.strategy.GroupByStrategySelector;
-import io.druid.query.lookup.LookupExtractor;
-import io.druid.query.lookup.LookupExtractorFactory;
-import io.druid.query.lookup.LookupExtractorFactoryContainer;
-import io.druid.query.lookup.LookupIntrospectHandler;
 import io.druid.query.lookup.LookupReferencesManager;
 import io.druid.query.metadata.SegmentMetadataQueryConfig;
 import io.druid.query.metadata.SegmentMetadataQueryQueryToolChest;
 import io.druid.query.metadata.SegmentMetadataQueryRunnerFactory;
 import io.druid.query.metadata.metadata.SegmentMetadataQuery;
+import io.druid.query.scan.ScanQuery;
+import io.druid.query.scan.ScanQueryConfig;
+import io.druid.query.scan.ScanQueryEngine;
+import io.druid.query.scan.ScanQueryQueryToolChest;
+import io.druid.query.scan.ScanQueryRunnerFactory;
 import io.druid.query.select.SelectQuery;
 import io.druid.query.select.SelectQueryConfig;
 import io.druid.query.select.SelectQueryEngine;
@@ -80,9 +90,24 @@ import io.druid.segment.IndexBuilder;
 import io.druid.segment.QueryableIndex;
 import io.druid.segment.TestHelper;
 import io.druid.segment.incremental.IncrementalIndexSchema;
+import io.druid.server.QueryLifecycleFactory;
 import io.druid.server.initialization.ServerConfig;
+import io.druid.server.log.NoopRequestLogger;
+import io.druid.server.security.Access;
+import io.druid.server.security.Action;
+import io.druid.server.security.AllowAllAuthenticator;
+import io.druid.server.security.NoopEscalator;
+import io.druid.server.security.AuthConfig;
 import io.druid.sql.calcite.aggregation.SqlAggregator;
-import io.druid.sql.calcite.expression.SqlExtractionOperator;
+import io.druid.server.security.AuthenticationResult;
+import io.druid.server.security.Authenticator;
+import io.druid.server.security.AuthenticatorMapper;
+import io.druid.server.security.Authorizer;
+import io.druid.server.security.AuthorizerMapper;
+import io.druid.server.security.Escalator;
+import io.druid.server.security.Resource;
+import io.druid.server.security.ResourceType;
+import io.druid.sql.calcite.expression.SqlOperatorConversion;
 import io.druid.sql.calcite.planner.DruidOperatorTable;
 import io.druid.sql.calcite.planner.PlannerConfig;
 import io.druid.sql.calcite.schema.DruidSchema;
@@ -91,10 +116,9 @@ import io.druid.sql.calcite.view.ViewManager;
 import io.druid.sql.guice.SqlModule;
 import io.druid.timeline.DataSegment;
 import io.druid.timeline.partition.LinearShardSpec;
-import org.easymock.EasyMock;
 import org.joda.time.DateTime;
+import org.joda.time.chrono.ISOChronology;
 
-import javax.annotation.Nullable;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -110,9 +134,76 @@ public class CalciteTests
 {
   public static final String DATASOURCE1 = "foo";
   public static final String DATASOURCE2 = "foo2";
+  public static final String FORBIDDEN_DATASOURCE = "forbiddenDatasource";
+
+  public static final String TEST_SUPERUSER_NAME = "testSuperuser";
+  public static final AuthorizerMapper TEST_AUTHORIZER_MAPPER = new AuthorizerMapper(null) {
+    @Override
+    public Authorizer getAuthorizer(String name)
+    {
+      return new Authorizer()
+      {
+        @Override
+        public Access authorize(
+            AuthenticationResult authenticationResult, Resource resource, Action action
+        )
+        {
+          if (authenticationResult.getIdentity().equals(TEST_SUPERUSER_NAME)) {
+            return Access.OK;
+          }
+
+          if (resource.getType() == ResourceType.DATASOURCE && resource.getName().equals(FORBIDDEN_DATASOURCE)) {
+            return new Access(false);
+          } else {
+            return Access.OK;
+          }
+        }
+      };
+    }
+  };
+  public static final AuthenticatorMapper TEST_AUTHENTICATOR_MAPPER;
+  static {
+    final Map<String, Authenticator> defaultMap = Maps.newHashMap();
+    defaultMap.put(
+        AuthConfig.ALLOW_ALL_NAME,
+        new AllowAllAuthenticator() {
+          @Override
+          public AuthenticationResult authenticateJDBCContext(Map<String, Object> context)
+          {
+            return new AuthenticationResult((String) context.get("user"), AuthConfig.ALLOW_ALL_NAME, null);
+          }
+        }
+    );
+    TEST_AUTHENTICATOR_MAPPER = new AuthenticatorMapper(defaultMap);
+  }
+  public static final Escalator TEST_AUTHENTICATOR_ESCALATOR;
+  static {
+    TEST_AUTHENTICATOR_ESCALATOR = new NoopEscalator() {
+
+      @Override
+      public AuthenticationResult createEscalatedAuthenticationResult()
+      {
+        return SUPER_USER_AUTH_RESULT;
+      }
+    };
+  }
+
+  public static final AuthenticationResult REGULAR_USER_AUTH_RESULT = new AuthenticationResult(
+      AuthConfig.ALLOW_ALL_NAME,
+      AuthConfig.ALLOW_ALL_NAME,
+      null
+  );
+
+  public static final AuthenticationResult SUPER_USER_AUTH_RESULT = new AuthenticationResult(
+      TEST_SUPERUSER_NAME,
+      AuthConfig.ALLOW_ALL_NAME,
+      null
+  );
 
   private static final String TIMESTAMP_COLUMN = "t";
-  private static final Supplier<SelectQueryConfig> selectConfigSupplier = Suppliers.ofInstance(new SelectQueryConfig(true));
+  private static final Supplier<SelectQueryConfig> SELECT_CONFIG_SUPPLIER = Suppliers.ofInstance(
+      new SelectQueryConfig(true)
+  );
 
   private static final Injector INJECTOR = Guice.createInjector(
       new Module()
@@ -124,52 +215,15 @@ public class CalciteTests
 
           // This Module is just to get a LookupReferencesManager with a usable "lookyloo" lookup.
 
-          final LookupReferencesManager mock = EasyMock.createMock(LookupReferencesManager.class);
-          EasyMock.expect(mock.get(EasyMock.eq("lookyloo"))).andReturn(
-              new LookupExtractorFactoryContainer(
-                  "v0",
-                  new LookupExtractorFactory()
-                  {
-                    @Override
-                    public boolean start()
-                    {
-                      throw new UnsupportedOperationException();
-                    }
-
-                    @Override
-                    public boolean close()
-                    {
-                      throw new UnsupportedOperationException();
-                    }
-
-                    @Override
-                    public boolean replaces(@Nullable final LookupExtractorFactory other)
-                    {
-                      throw new UnsupportedOperationException();
-                    }
-
-                    @Override
-                    public LookupIntrospectHandler getIntrospectHandler()
-                    {
-                      throw new UnsupportedOperationException();
-                    }
-
-                    @Override
-                    public LookupExtractor get()
-                    {
-                      return new MapLookupExtractor(
-                          ImmutableMap.of(
-                              "a", "xa",
-                              "abc", "xabc"
-                          ),
-                          false
-                      );
-                    }
-                  }
-              )
-          ).anyTimes();
-          EasyMock.replay(mock);
-          binder.bind(LookupReferencesManager.class).toInstance(mock);
+          binder.bind(LookupReferencesManager.class)
+                .toInstance(
+                    TestExpressionMacroTable.createTestLookupReferencesManager(
+                        ImmutableMap.of(
+                            "a", "xa",
+                            "abc", "xabc"
+                        )
+                    )
+                );
         }
       }
   );
@@ -186,14 +240,24 @@ public class CalciteTests
               )
           )
           .put(
+              ScanQuery.class,
+              new ScanQueryRunnerFactory(
+                  new ScanQueryQueryToolChest(
+                      new ScanQueryConfig(),
+                      new DefaultGenericQueryMetricsFactory(TestHelper.getJsonMapper())
+                  ),
+                  new ScanQueryEngine()
+              )
+          )
+          .put(
               SelectQuery.class,
               new SelectQueryRunnerFactory(
                   new SelectQueryQueryToolChest(
                       TestHelper.getJsonMapper(),
                       QueryRunnerTestHelper.NoopIntervalChunkingQueryRunnerDecorator(),
-                      selectConfigSupplier
+                      SELECT_CONFIG_SUPPLIER
                   ),
-                  new SelectQueryEngine(selectConfigSupplier),
+                  new SelectQueryEngine(SELECT_CONFIG_SUPPLIER),
                   QueryRunnerTestHelper.NOOP_QUERYWATCHER
               )
           )
@@ -281,25 +345,42 @@ public class CalciteTests
   private static final IncrementalIndexSchema INDEX_SCHEMA = new IncrementalIndexSchema.Builder()
       .withMetrics(
           new CountAggregatorFactory("cnt"),
-          new DoubleSumAggregatorFactory("m1", "m1"),
+          new FloatSumAggregatorFactory("m1", "m1"),
+          new DoubleSumAggregatorFactory("m2", "m2"),
           new HyperUniquesAggregatorFactory("unique_dim1", "dim1")
       )
       .withRollup(false)
       .build();
 
   public static final List<InputRow> ROWS1 = ImmutableList.of(
-      createRow(ImmutableMap.of("t", "2000-01-01", "m1", "1.0", "dim1", "", "dim2", ImmutableList.of("a"))),
-      createRow(ImmutableMap.of("t", "2000-01-02", "m1", "2.0", "dim1", "10.1", "dim2", ImmutableList.of())),
-      createRow(ImmutableMap.of("t", "2000-01-03", "m1", "3.0", "dim1", "2", "dim2", ImmutableList.of(""))),
-      createRow(ImmutableMap.of("t", "2001-01-01", "m1", "4.0", "dim1", "1", "dim2", ImmutableList.of("a"))),
-      createRow(ImmutableMap.of("t", "2001-01-02", "m1", "5.0", "dim1", "def", "dim2", ImmutableList.of("abc"))),
-      createRow(ImmutableMap.of("t", "2001-01-03", "m1", "6.0", "dim1", "abc"))
+      createRow(
+          ImmutableMap.of("t", "2000-01-01", "m1", "1.0", "m2", "1.0", "dim1", "", "dim2", ImmutableList.of("a"))
+      ),
+      createRow(
+          ImmutableMap.of("t", "2000-01-02", "m1", "2.0", "m2", "2.0", "dim1", "10.1", "dim2", ImmutableList.of())
+      ),
+      createRow(
+          ImmutableMap.of("t", "2000-01-03", "m1", "3.0", "m2", "3.0", "dim1", "2", "dim2", ImmutableList.of(""))
+      ),
+      createRow(
+          ImmutableMap.of("t", "2001-01-01", "m1", "4.0", "m2", "4.0", "dim1", "1", "dim2", ImmutableList.of("a"))
+      ),
+      createRow(
+          ImmutableMap.of("t", "2001-01-02", "m1", "5.0", "m2", "5.0", "dim1", "def", "dim2", ImmutableList.of("abc"))
+      ),
+      createRow(
+          ImmutableMap.of("t", "2001-01-03", "m1", "6.0", "m2", "6.0", "dim1", "abc")
+      )
   );
 
   public static final List<InputRow> ROWS2 = ImmutableList.of(
       createRow("2000-01-01", "דרואיד", "he", 1.0),
       createRow("2000-01-01", "druid", "en", 1.0),
       createRow("2000-01-01", "друид", "ru", 1.0)
+  );
+
+  public static final List<InputRow> FORBIDDEN_ROWS = ImmutableList.of(
+      createRow("2000-01-01", "forbidden", "abcd", 9999.0)
   );
 
   private CalciteTests()
@@ -310,6 +391,32 @@ public class CalciteTests
   public static QueryRunnerFactoryConglomerate queryRunnerFactoryConglomerate()
   {
     return CONGLOMERATE;
+  }
+
+  public static QueryLifecycleFactory createMockQueryLifecycleFactory(final QuerySegmentWalker walker)
+  {
+    return new QueryLifecycleFactory(
+        new QueryToolChestWarehouse()
+        {
+          @Override
+          public <T, QueryType extends Query<T>> QueryToolChest<T, QueryType> getToolChest(final QueryType query)
+          {
+            return CONGLOMERATE.findFactory(query).getToolchest();
+          }
+        },
+        walker,
+        new DefaultGenericQueryMetricsFactory(INJECTOR.getInstance(Key.get(ObjectMapper.class, Json.class))),
+        new ServiceEmitter("dummy", "dummy", new NoopEmitter()),
+        new NoopRequestLogger(),
+        new ServerConfig(),
+        new AuthConfig(),
+        TEST_AUTHORIZER_MAPPER
+    );
+  }
+
+  public static ObjectMapper getJsonMapper()
+  {
+    return INJECTOR.getInstance(Key.get(ObjectMapper.class, Json.class));
   }
 
   public static SpecificSegmentsQuerySegmentWalker createMockWalker(final File tmpDir)
@@ -328,6 +435,13 @@ public class CalciteTests
                                               .rows(ROWS2)
                                               .buildMMappedIndex();
 
+    final QueryableIndex forbiddenIndex = IndexBuilder.create()
+                                                      .tmpDir(new File(tmpDir, "forbidden"))
+                                                      .indexMerger(TestHelper.getTestIndexMergerV9())
+                                                      .schema(INDEX_SCHEMA)
+                                                      .rows(FORBIDDEN_ROWS)
+                                                      .buildMMappedIndex();
+
     return new SpecificSegmentsQuerySegmentWalker(queryRunnerFactoryConglomerate()).add(
         DataSegment.builder()
                    .dataSource(DATASOURCE1)
@@ -344,6 +458,14 @@ public class CalciteTests
                    .shardSpec(new LinearShardSpec(0))
                    .build(),
         index2
+    ).add(
+        DataSegment.builder()
+                   .dataSource(FORBIDDEN_DATASOURCE)
+                   .interval(forbiddenIndex.getDataInterval())
+                   .version("1")
+                   .shardSpec(new LinearShardSpec(0))
+                   .build(),
+        forbiddenIndex
     );
   }
 
@@ -353,6 +475,7 @@ public class CalciteTests
     for (Class<? extends ExprMacroTable.ExprMacro> clazz : ExpressionModule.EXPR_MACROS) {
       exprMacros.add(INJECTOR.getInstance(clazz));
     }
+    exprMacros.add(INJECTOR.getInstance(LookupExprMacro.class));
     return new ExprMacroTable(exprMacros);
   }
 
@@ -360,13 +483,13 @@ public class CalciteTests
   {
     try {
       final Set<SqlAggregator> aggregators = new HashSet<>();
-      final Set<SqlExtractionOperator> extractionOperators = new HashSet<>();
+      final Set<SqlOperatorConversion> extractionOperators = new HashSet<>();
 
       for (Class<? extends SqlAggregator> clazz : SqlModule.DEFAULT_AGGREGATOR_CLASSES) {
         aggregators.add(INJECTOR.getInstance(clazz));
       }
 
-      for (Class<? extends SqlExtractionOperator> clazz : SqlModule.DEFAULT_EXTRACTION_OPERATOR_CLASSES) {
+      for (Class<? extends SqlOperatorConversion> clazz : SqlModule.DEFAULT_OPERATOR_CONVERSION_CLASSES) {
         extractionOperators.add(INJECTOR.getInstance(clazz));
       }
 
@@ -392,11 +515,11 @@ public class CalciteTests
   )
   {
     final DruidSchema schema = new DruidSchema(
-        walker,
+        CalciteTests.createMockQueryLifecycleFactory(walker),
         new TestServerInventoryView(walker.getSegments()),
         plannerConfig,
         viewManager,
-        new ServerConfig()
+        TEST_AUTHENTICATOR_ESCALATOR
     );
 
     schema.start();
@@ -420,7 +543,7 @@ public class CalciteTests
   {
     return PARSER.parse(
         ImmutableMap.<String, Object>of(
-            "t", new DateTime(t).getMillis(),
+            "t", new DateTime(t, ISOChronology.getInstanceUTC()).getMillis(),
             "dim1", dim1,
             "dim2", dim2,
             "m1", m1

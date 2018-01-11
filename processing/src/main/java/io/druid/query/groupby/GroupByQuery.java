@@ -348,7 +348,7 @@ public class GroupByQuery extends BaseQuery<Row>
         throw new IAE("When forcing limit push down, a limit spec must be provided.");
       }
 
-      if (((DefaultLimitSpec) limitSpec).getLimit() == Integer.MAX_VALUE) {
+      if (!((DefaultLimitSpec) limitSpec).isLimited()) {
         throw new IAE("When forcing limit push down, the provided limit spec must have a limit.");
       }
 
@@ -373,7 +373,7 @@ public class GroupByQuery extends BaseQuery<Row>
       DefaultLimitSpec defaultLimitSpec = (DefaultLimitSpec) limitSpec;
 
       // If only applying an orderby without a limit, don't try to push down
-      if (defaultLimitSpec.getLimit() == Integer.MAX_VALUE) {
+      if (!defaultLimitSpec.isLimited()) {
         return false;
       }
 
@@ -429,7 +429,7 @@ public class GroupByQuery extends BaseQuery<Row>
         dimsInOrderBy.add(dimIndex);
         needsReverseList.add(needsReverse);
         final ValueType type = dimensions.get(dimIndex).getOutputType();
-        isNumericField.add(type == ValueType.LONG || type == ValueType.FLOAT);
+        isNumericField.add(ValueType.isNumeric(type));
         comparators.add(orderSpec.getDimensionComparator());
       }
     }
@@ -439,7 +439,7 @@ public class GroupByQuery extends BaseQuery<Row>
         orderedFieldNames.add(dimensions.get(i).getOutputName());
         needsReverseList.add(false);
         final ValueType type = dimensions.get(i).getOutputType();
-        isNumericField.add(type == ValueType.LONG || type == ValueType.FLOAT);
+        isNumericField.add(ValueType.isNumeric(type));
         comparators.add(StringComparators.LEXICOGRAPHIC);
       }
     }
@@ -577,6 +577,11 @@ public class GroupByQuery extends BaseQuery<Row>
             ((Number) rhs.getRaw(dimension.getOutputName())).longValue()
         );
       } else if (dimension.getOutputType() == ValueType.FLOAT) {
+        dimCompare = Float.compare(
+            ((Number) lhs.getRaw(dimension.getOutputName())).floatValue(),
+            ((Number) rhs.getRaw(dimension.getOutputName())).floatValue()
+        );
+      } else if (dimension.getOutputType() == ValueType.DOUBLE) {
         dimCompare = Double.compare(
             ((Number) lhs.getRaw(dimension.getOutputName())).doubleValue(),
             ((Number) rhs.getRaw(dimension.getOutputName())).doubleValue()
@@ -621,10 +626,10 @@ public class GroupByQuery extends BaseQuery<Row>
       }
 
       if (isNumericField.get(i)) {
-        if (comparator == StringComparators.NUMERIC) {
+        if (comparator.equals(StringComparators.NUMERIC)) {
           dimCompare = ((Ordering) Comparators.naturalNullsFirst()).compare(
-              rhs.getRaw(fieldName),
-              lhs.getRaw(fieldName)
+              lhs.getRaw(fieldName),
+              rhs.getRaw(fieldName)
           );
         } else {
           dimCompare = comparator.compare(String.valueOf(lhsObj), String.valueOf(rhsObj));
