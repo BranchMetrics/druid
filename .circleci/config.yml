@@ -28,13 +28,32 @@ jobs:
           # fallback to using the latest cache if no exact match is found
           - v1-dependencies-
 
-      # Create Package !
+      # Setup Nexus for Branch
+      - run:
+          name: Setup
+          command: |
+            cd && git clone git@github.com:branchmetrics/deploy.git
+            cp ~/deploy/maven/settings.xml $HOME/.m2/
+
+      # Create Package if not release!
       - run:
           name: Create Druid Package
           command: |
+            if ! [[ $RELEASE ]]; then mvn -B clean package -DskipTests=true; fi
+
+      # Deploy if not release!
+      - run:
+          name: Deploy Druid Package
+          command: |
+            if ! [[ $RELEASE ]]; then mvn -B clean deploy -DskipTests=true; fi
+
+      # Create Package if release!
+      - run:
+          name: Create Druid Release Package
+          command: |
             if [[ $GIT_USER_EMAIL ]]; then git config --global user.email "$GIT_USER_EMAIL" ; fi
             if [[ $GIT_USER_NAME ]]; then git config --global user.name "$GIT_USER_NAME" ; fi
-            if [[ $RELEASE ]]; then ./release.sh $RELEASE $NEXT $HADOOP_VERSION; else mvn package -DskipTests=true; fi
+            if [[ $RELEASE ]]; then ./release.sh $RELEASE $NEXT $HADOOP_VERSION; fi
 
       - save_cache:
           paths:
