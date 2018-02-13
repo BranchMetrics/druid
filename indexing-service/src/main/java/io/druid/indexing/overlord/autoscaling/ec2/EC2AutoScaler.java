@@ -19,6 +19,7 @@
 
 package io.druid.indexing.overlord.autoscaling.ec2;
 
+import com.amazonaws.regions.RegionUtils;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.model.DescribeInstancesRequest;
 import com.amazonaws.services.ec2.model.DescribeInstancesResult;
@@ -69,6 +70,7 @@ public class EC2AutoScaler implements AutoScaler<EC2EnvironmentConfig>
     this.maxNumWorkers = maxNumWorkers;
     this.envConfig = envConfig;
     this.amazonEC2Client = amazonEC2Client;
+    this.amazonEC2Client.setRegion(RegionUtils.getRegion("us-west-1"));
     this.config = config;
   }
 
