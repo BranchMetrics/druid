@@ -24,7 +24,6 @@ import com.google.common.collect.Sets;
 import io.druid.data.input.impl.DimensionSchema;
 import io.druid.indexer.HadoopDruidIndexerConfig;
 import io.druid.query.aggregation.AggregatorFactory;
-import io.druid.query.aggregation.CountAggregatorFactory;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
@@ -33,7 +32,9 @@ import org.apache.parquet.hadoop.api.InitContext;
 import org.apache.parquet.io.api.RecordMaterializer;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Type;
+import org.codehaus.jackson.node.NullNode;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -88,7 +89,25 @@ public class DruidParquetReadSupport extends AvroReadSupport<GenericRecord>
   {
 
     MessageType parquetSchema = readContext.getRequestedSchema();
-    Schema avroSchema = new AvroSchemaConverter(configuration).convert(parquetSchema);
+
+    Schema avroSchema;
+    if(keyValueMetaData.get("parquet.avro.schema") != null) {
+      avroSchema = (new Schema.Parser()).parse(keyValueMetaData.get("parquet.avro.schema"));
+      Schema projectedAvroSchema = Schema.createRecord(avroSchema.getName(), null, avroSchema.getNamespace(), false);
+      List<Schema.Field> fields = new ArrayList<Schema.Field>();
+      for (Type parquetField : parquetSchema.getFields()) {
+        for (Schema.Field avroField : avroSchema.getFields()) {
+          if (parquetField.getName().equals(avroField.name())) {
+            fields.add(new Schema.Field(avroField.name(), avroField.schema(), null,
+                    NullNode.getInstance()));
+          }
+        }
+      }
+      projectedAvroSchema.setFields(fields);
+      avroSchema = projectedAvroSchema;
+    } else {
+      avroSchema = new AvroSchemaConverter(configuration).convert(parquetSchema);
+    }
 
     Class<? extends AvroDataSupplier> suppClass = configuration.getClass(
         AVRO_DATA_SUPPLIER,
@@ -96,7 +115,7 @@ public class DruidParquetReadSupport extends AvroReadSupport<GenericRecord>
         AvroDataSupplier.class
     );
     AvroDataSupplier supplier = ReflectionUtils.newInstance(suppClass, configuration);
-    return new AvroRecordMaterializer<GenericRecord>(parquetSchema, avroSchema, supplier.get());
+    return new AvroRecordMaterializer<>(parquetSchema, avroSchema, supplier.get());
   }
 
 }
