@@ -15,12 +15,6 @@
 
     <dependencies>
         <dependency>
-            <groupId>io.druid.extensions</groupId>
-            <artifactId>druid-avro-extensions</artifactId>
-            <version>${project.parent.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
             <groupId>org.apache.parquet</groupId>
             <artifactId>parquet-avro</artifactId>
             <version>1.8.2</version>

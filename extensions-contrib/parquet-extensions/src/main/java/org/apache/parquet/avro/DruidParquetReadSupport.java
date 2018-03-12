@@ -19,11 +19,15 @@
 
 package org.apache.parquet.avro;
 
+
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.fasterxml.jackson.databind.node.NullNode;
+
 import io.druid.data.input.impl.DimensionSchema;
 import io.druid.indexer.HadoopDruidIndexerConfig;
 import io.druid.query.aggregation.AggregatorFactory;
+
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
@@ -33,6 +37,7 @@ import org.apache.parquet.io.api.RecordMaterializer;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Type;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -95,7 +100,27 @@ public class DruidParquetReadSupport extends AvroReadSupport<GenericRecord>
   )
   {
     MessageType parquetSchema = readContext.getRequestedSchema();
-    Schema avroSchema = new AvroSchemaConverter(configuration).convert(parquetSchema);
+
+    Schema avroSchema;
+    if (keyValueMetaData.get("parquet.avro.schema") != null) {
+      avroSchema = (new Schema.Parser()).parse(keyValueMetaData.get("parquet.avro.schema"));
+      Schema projectedAvroSchema = Schema.createRecord(avroSchema.getName(), null, avroSchema.getNamespace(), false);
+      List<Schema.Field> fields = new ArrayList<Schema.Field>();
+      for (Type parquetField : parquetSchema.getFields()) {
+        for (Schema.Field avroField : avroSchema.getFields()) {
+            if (parquetField.getName().equals(avroField.name())) {
+              fields.add(new Schema.Field(avroField.name(), avroField.schema(), null,
+                NullNode.getInstance()));
+            }
+        }
+      }
+      projectedAvroSchema.setFields(fields);
+      avroSchema = projectedAvroSchema;
+    } else {
+      avroSchema = new AvroSchemaConverter(configuration).convert(parquetSchema);
+    }
+
+    configuration.setBoolean("parquet.avro.write-old-list-structure", false);
 
     Class<? extends AvroDataSupplier> suppClass = configuration.getClass(
         AVRO_DATA_SUPPLIER,
