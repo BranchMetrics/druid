@@ -14,12 +14,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <dependencies>
-        <dependency>
-            <groupId>io.druid.extensions</groupId>
-            <artifactId>druid-avro-extensions</artifactId>
-            <version>${project.parent.version}</version>
-            <scope>provided</scope>
-        </dependency>
+        <!--<dependency>-->
+            <!--<groupId>io.druid.extensions</groupId>-->
+            <!--<artifactId>druid-avro-extensions</artifactId>-->
+            <!--<version>${project.parent.version}</version>-->
+            <!--<scope>provided</scope>-->
+        <!--</dependency>-->
         <dependency>
             <groupId>org.apache.parquet</groupId>
             <artifactId>parquet-avro</artifactId>
