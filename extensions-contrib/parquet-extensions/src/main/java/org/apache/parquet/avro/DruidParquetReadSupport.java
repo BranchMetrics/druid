@@ -102,7 +102,7 @@ public class DruidParquetReadSupport extends AvroReadSupport<GenericRecord>
     MessageType parquetSchema = readContext.getRequestedSchema();
 
     Schema avroSchema;
-    if(keyValueMetaData.get("parquet.avro.schema") != null) {
+    if (keyValueMetaData.get("parquet.avro.schema") != null) {
       avroSchema = (new Schema.Parser()).parse(keyValueMetaData.get("parquet.avro.schema"));
       Schema projectedAvroSchema = Schema.createRecord(avroSchema.getName(), null, avroSchema.getNamespace(), false);
       List<Schema.Field> fields = new ArrayList<Schema.Field>();
