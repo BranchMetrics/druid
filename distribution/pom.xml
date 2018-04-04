@@ -78,6 +78,8 @@
                                 <argument>-c</argument>
                                 <argument>io.druid.extensions:druid-avro-extensions</argument>
                                 <argument>-c</argument>
+                                <argument>io.druid.extensions.contrib:druid-parquet-extensions</argument>
+                                <argument>-c</argument>
                                 <argument>io.druid.extensions:druid-caffeine-cache</argument>
                                 <argument>-c</argument>
                                 <argument>io.druid.extensions:druid-datasketches</argument>
