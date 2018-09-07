@@ -35,7 +35,7 @@ import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.joda.time.DateTime;
-
+import io.druid.java.util.common.logger.Logger;
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -46,6 +46,7 @@ public class ParquetHadoopInputRowParser implements InputRowParser<GenericRecord
   private final boolean binaryAsString;
   private final List<String> dimensions;
   private final TimestampSpec timestampSpec;
+  private static final Logger log = new Logger(ParquetHadoopInputRowParser.class);
 
   @JsonCreator
   public ParquetHadoopInputRowParser(
@@ -81,6 +82,7 @@ public class ParquetHadoopInputRowParser implements InputRowParser<GenericRecord
   @Override
   public InputRow parse(GenericRecord record)
   {
+
     // Map the record to a map
     GenericRecordAsMap genericRecordAsMap = new GenericRecordAsMap(record, false, binaryAsString);
 

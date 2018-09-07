@@ -21,6 +21,7 @@ package io.druid.data.input.avro;
 import com.google.common.base.Function;
 import com.google.common.collect.Lists;
 import io.druid.java.util.common.StringUtils;
+import java.util.stream.Collectors;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.util.Utf8;
@@ -105,6 +106,16 @@ public class GenericRecordAsMap implements Map<String, Object>
     if (fromPigAvroStorage && field instanceof GenericData.Array) {
       return Lists.transform((List) field, PIG_AVRO_STORAGE_ARRAY_TO_STRING_INCLUDING_NULL);
     }
+    if (field instanceof List) {
+      List<GenericData.Record> fieldListElements = List.class.cast(field);
+      return fieldListElements.stream().map(entry -> {
+        if (entry != null && (entry.get("element") != null)) {
+          return entry.get("element");
+        }
+        return entry;
+      }).collect(Collectors.toList());
+    }
+
     if (field instanceof ByteBuffer) {
       if (binaryAsString) {
         return StringUtils.fromUtf8(((ByteBuffer) field).array());
