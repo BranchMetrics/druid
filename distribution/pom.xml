@@ -78,6 +78,8 @@
                                 <argument>-c</argument>
                                 <argument>io.druid.extensions:druid-avro-extensions</argument>
                                 <argument>-c</argument>
+                                <argument>io.druid.extensions.contrib:druid-parquet-extensions</argument>
+                                <argument>-c</argument>
                                 <argument>io.druid.extensions:druid-caffeine-cache</argument>
                                 <argument>-c</argument>
                                 <argument>io.druid.extensions:druid-datasketches</argument>
@@ -128,7 +130,7 @@
                                 <argument>${project.build.directory}/extensions</argument>
                                 <argument>-czvf</argument>
                                 <argument>
-                                    ${project.build.directory}/mysql-metadata-storage-${project.parent.version}.tar.gz
+                                    ${project.build.directory}/mysql-metadata-storage-${project.parent.version}-${branch.version}.tar.gz
                                 </argument>
                                 <argument>mysql-metadata-storage</argument>
                             </arguments>
@@ -147,7 +149,7 @@
                             <goal>single</goal>
                         </goals>
                         <configuration>
-                            <finalName>${project.parent.artifactId}-${project.parent.version}</finalName>
+                            <finalName>${project.parent.artifactId}-${project.parent.version}-${branch.version}</finalName>
                             <tarLongFileMode>posix</tarLongFileMode>
                             <descriptors>
                                 <descriptor>src/assembly/assembly.xml</descriptor>

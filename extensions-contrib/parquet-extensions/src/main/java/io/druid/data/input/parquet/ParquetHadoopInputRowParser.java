@@ -35,7 +35,6 @@ import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.joda.time.DateTime;
-
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -81,6 +80,7 @@ public class ParquetHadoopInputRowParser implements InputRowParser<GenericRecord
   @Override
   public InputRow parse(GenericRecord record)
   {
+
     // Map the record to a map
     GenericRecordAsMap genericRecordAsMap = new GenericRecordAsMap(record, false, binaryAsString);
 
