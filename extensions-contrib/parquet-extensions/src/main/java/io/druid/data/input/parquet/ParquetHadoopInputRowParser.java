@@ -34,6 +34,7 @@ import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import io.druid.java.util.common.logger.Logger;
 import org.joda.time.DateTime;
 import javax.annotation.Nullable;
 import java.util.List;
@@ -45,6 +46,7 @@ public class ParquetHadoopInputRowParser implements InputRowParser<GenericRecord
   private final boolean binaryAsString;
   private final List<String> dimensions;
   private final TimestampSpec timestampSpec;
+  private static final Logger log = new Logger(ParquetHadoopInputRowParser.class);
 
   @JsonCreator
   public ParquetHadoopInputRowParser(
@@ -83,6 +85,7 @@ public class ParquetHadoopInputRowParser implements InputRowParser<GenericRecord
 
     // Map the record to a map
     GenericRecordAsMap genericRecordAsMap = new GenericRecordAsMap(record, false, binaryAsString);
+    log.info("The install_activity_touch_data_tilde_tags in the record map:%s", genericRecordAsMap.get("install_activity_touch_data_tilde_tags"));
 
     // Determine logical type of the timestamp column
     LogicalType logicalType = determineTimestampSpecLogicalType(record.getSchema(), timestampSpec.getTimestampColumn());

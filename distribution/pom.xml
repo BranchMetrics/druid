@@ -136,6 +136,31 @@
                             </arguments>
                         </configuration>
                     </execution>
+
+
+                    <!--parquet extension-->
+
+                    <execution>
+                        <id>druid-parquet-extensions-tarball</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>tar</executable>
+                            <arguments>
+                                <argument>-C</argument>
+                                <argument>${project.build.directory}/extensions</argument>
+                                <argument>-czvf</argument>
+                                <argument>
+                                    ${project.build.directory}/druid-parquet-extensions-${project.parent.version}-${branch.version}.tar.gz
+                                </argument>
+                                <argument>druid-parquet-extensions</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+
+
                 </executions>
             </plugin>
             <plugin>

@@ -25,7 +25,7 @@ import java.util.stream.Collectors;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.util.Utf8;
-
+import io.druid.java.util.common.logger.Logger;
 import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -39,7 +39,7 @@ public class GenericRecordAsMap implements Map<String, Object>
   private final GenericRecord record;
   private final boolean fromPigAvroStorage;
   private final boolean binaryAsString;
-
+  private static final Logger log = new Logger(GenericRecordAsMap.class);
   private static final Function<Object, String> PIG_AVRO_STORAGE_ARRAY_TO_STRING_INCLUDING_NULL = new Function<Object, String>()
   {
     @Nullable
@@ -102,12 +102,17 @@ public class GenericRecordAsMap implements Map<String, Object>
   @Override
   public Object get(Object key)
   {
+
     Object field = record.get(key.toString());
     if (fromPigAvroStorage && field instanceof GenericData.Array) {
       return Lists.transform((List) field, PIG_AVRO_STORAGE_ARRAY_TO_STRING_INCLUDING_NULL);
     }
     if (field instanceof List) {
+      log.info("The key is:%s", key.toString());
+      log.info("The Field is:%s", field.toString());
+      log.info("The Field object type is:%s", field.getClass().getName());
       List<GenericData.Record> fieldListElements = List.class.cast(field);
+      log.info("Elements of the list: %s", Arrays.toString(fieldListElements.toArray()));
       return fieldListElements.stream().map(entry -> {
         if (entry != null && (entry.get("element") != null)) {
           return entry.get("element");
