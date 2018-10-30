@@ -111,8 +111,13 @@ public class GenericRecordAsMap implements Map<String, Object>
       log.info("The key is:%s", key.toString());
       log.info("The Field is:%s", field.toString());
       log.info("The Field object type is:%s", field.getClass().getName());
+      log.error("The key is:%s", key.toString());
+      log.error("The Field is:%s", field.toString());
+      log.error("The Field object type is:%s", field.getClass().getName());
+
       List<GenericData.Record> fieldListElements = List.class.cast(field);
       log.info("Elements of the list: %s", Arrays.toString(fieldListElements.toArray()));
+      log.error("Elements of the list: %s", Arrays.toString(fieldListElements.toArray()));
       return fieldListElements.stream().map(entry -> {
         if (entry != null && (entry.get("element") != null)) {
           return entry.get("element");

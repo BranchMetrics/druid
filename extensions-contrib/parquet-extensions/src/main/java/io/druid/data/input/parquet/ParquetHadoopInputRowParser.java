@@ -86,6 +86,8 @@ public class ParquetHadoopInputRowParser implements InputRowParser<GenericRecord
     // Map the record to a map
     GenericRecordAsMap genericRecordAsMap = new GenericRecordAsMap(record, false, binaryAsString);
     log.info("The install_activity_touch_data_tilde_tags in the record map:%s", genericRecordAsMap.get("install_activity_touch_data_tilde_tags"));
+    log.error("The install_activity_touch_data_tilde_tags in the record map:%s", genericRecordAsMap.get("install_activity_touch_data_tilde_tags"));
+
 
     // Determine logical type of the timestamp column
     LogicalType logicalType = determineTimestampSpecLogicalType(record.getSchema(), timestampSpec.getTimestampColumn());

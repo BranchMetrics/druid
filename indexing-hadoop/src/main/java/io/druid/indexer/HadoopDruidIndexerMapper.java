@@ -102,6 +102,10 @@ public abstract class HadoopDruidIndexerMapper<KEYOUT, VALUEOUT> extends Mapper<
     } else if (value instanceof InputRow) {
       return (InputRow) value;
     } else {
+      log.info("The parsespec is: %s", parser.getParseSpec());
+      log.error("The parsespec is: %s", parser.getParseSpec());
+      log.info("The value to be parsed is: %s", value.toString());
+      log.error("The value to be parsed is: %s", value.toString());
       return parser.parse(value);
     }
   }
