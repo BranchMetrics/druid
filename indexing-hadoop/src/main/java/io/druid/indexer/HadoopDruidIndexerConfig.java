@@ -579,7 +579,7 @@ public class HadoopDruidIndexerConfig
   public void verify()
   {
     try {
-      log.info("Running with config:%n%s", JSON_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(this));
+      log.info("Running with testing config:%n%s", JSON_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(this));
     }
     catch (IOException e) {
       throw Throwables.propagate(e);
